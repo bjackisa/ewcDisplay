@@ -675,7 +675,8 @@ hr.sep{
       <button class="btn" id="scripture-go-btn" style="margin-top:.8rem;">Show verse</button>
       <button class="btn" id="choose-scripture-file-btn" style="margin-top:.5rem;">Choose en_kjv.json…</button>
       <input type="file" id="scripture-file-input" accept="application/json,.json">
-      <p class="hint" id="scripture-status" style="margin-top:.6rem;">Loading en_kjv.json…</p>
+      <p class="hint" id="scripture-status" style="margin-top:.6rem;">Loading Bible…</p>
+      <p class="hint">Only needed if the Bible doesn’t load on its own — pick <code>en_kjv.json</code> here, or serve this folder over http.</p>
       <p class="hint">While the scripture card is showing, use the ← and → arrow keys to step to the next or previous verse — no need to reopen this panel.</p>
     </div>
 
@@ -702,6 +703,12 @@ hr.sep{
 <!-- Three.js (pinned UMD build) — powers the ambient background particles
      and the analog clock. Loaded from the approved cdnjs host. -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+<!-- bible-data.js (the KJV text, generated from en_kjv.json by
+     build_bible_data.py) is pulled in on demand by the scripture code below
+     rather than loaded here, so the timer and clock views don't pay for a
+     4 MB parse they never use. See loadBibleData() for why it ships as a
+     classic script: that is what makes the Bible load on file:///…. -->
 
 <script>
 /* ============================================================================
@@ -827,6 +834,8 @@ hr.sep{
     scriptureVerseInput: document.getElementById('scripture-verse-input'),
     scriptureGoBtn: document.getElementById('scripture-go-btn'),
     scriptureStatus: document.getElementById('scripture-status'),
+    chooseScriptureFileBtn: document.getElementById('choose-scripture-file-btn'),
+    scriptureFileInput: document.getElementById('scripture-file-input'),
 
     chooseImageBtn: document.getElementById('choose-image-btn'),
     clearImageBtn: document.getElementById('clear-image-btn'),
@@ -1178,34 +1187,125 @@ hr.sep{
     return entry ? entry.abbrev.toUpperCase() : '';
   }
 
-  /** Fetches en_kjv.json from beside this file. Lazy — only runs the first
-   *  time the scripture card is actually needed. */
+  /** Validates a candidate Bible array and, if it looks right, installs it
+   *  as the active dataset and repaints the picker + card. Returns whether
+   *  the data was accepted. */
+  function applyBibleData(data) {
+    if (!Array.isArray(data) || data.length === 0) return false;
+    bibleData = data.map(book => Object.assign({}, book, {
+      chapters: book.chapters.map(chapter => chapter.map(stripKjvMarkup))
+    }));
+    bibleLoadState = 'ready';
+    populateScriptureBookSelect();
+    clampScriptureReference();
+    setScriptureStatus('');
+    renderScripture();
+    return true;
+  }
+
+  // en_kjv.json carries the KJV's own printing apparatus inline: {are}
+  // marks a supplied word, {word: Heb. ...} is a translator's note, and
+  // «...» wraps a book colophon. bible-data.js is already cleaned when it is
+  // generated, but a raw en_kjv.json arriving via fetch() or the file picker
+  // is not — so normalise here and both routes render identically.
+  const KJV_NOTE = /:\s|\.\.\.|\b(?:Heb|Gr|Chal|Syriac|Arab|i\.e)\.|(?:^|[;,])\s*or,/;
+  const KJV_NOTE_MAX_LENGTH = 34; // supplied-word spans are always short
+
+  function isKjvNote(span) {
+    return span.length > KJV_NOTE_MAX_LENGTH || KJV_NOTE.test(span);
+  }
+
+  /** Drops translator's notes and colophons, unwrapping supplied words so
+   *  the verse reads as clean scripture. */
+  function stripKjvMarkup(verse) {
+    if (verse.indexOf('{') === -1 && verse.indexOf('«') === -1) return verse;
+    let text = verse.replace(/«.*?»/g, '');
+    // A few verses close a note early and leave an extra "}" — the note
+    // really runs to the last "}", so treat that whole region as one span.
+    if (text.split('}').length > text.split('{').length) {
+      const start = text.indexOf('{');
+      const end = text.lastIndexOf('}');
+      if (end > start) {
+        const inner = text.slice(start + 1, end);
+        text = text.slice(0, start) + (isKjvNote(inner) ? '' : inner) + text.slice(end + 1);
+      }
+    }
+    text = text.replace(/\{([^{}]*)\}/g, (match, span) => (isKjvNote(span) ? '' : span));
+    return text.replace(/[{}]/g, '').replace(/\s+/g, ' ').trim();
+  }
+
+  /** Parses JSON text, tolerating the UTF-8 BOM that some copies of
+   *  en_kjv.json (including this repo's) carry — JSON.parse rejects it. */
+  function parseBibleJSON(text) {
+    return JSON.parse(text.replace(/^\uFEFF/, ''));
+  }
+
+  /** Asks the user to pick en_kjv.json from disk. The only route that works
+   *  on file:// when bible-data.js is missing, since a <input type=file>
+   *  read is user-initiated and so exempt from the local-file fetch block. */
+  function promptForBibleFile() {
+    bibleLoadState = 'idle'; // allow a retry once a file is chosen
+    setScriptureStatus('Pick en_kjv.json to load the Bible (or serve this folder over http).');
+    renderScripturePlaceholder('Scripture unavailable', 'Choose en_kjv.json in settings.');
+    el.scriptureBookSelect.innerHTML = '<option>Choose a file…</option>';
+    el.scriptureBookSelect.disabled = true;
+  }
+
+  /** Loads the Bible text. Lazy — only runs the first time the scripture
+   *  card is actually needed, and only once.
+   *
+   *  The page is used both from a web server and straight off disk, so three
+   *  sources are tried in order:
+   *    1. bible-data.js, injected as a classic <script>. This is what makes
+   *       file:/// work: browsers block fetch() against local files, but a
+   *       classic script tag is still allowed, so the data arrives without
+   *       a server or any user action.
+   *    2. fetch('en_kjv.json') — when the folder is served over http(s) and
+   *       bible-data.js hasn't been generated.
+   *    3. The manual file picker — last resort for file:// in that case. */
   function loadBibleData() {
     if (bibleLoadState === 'loading' || bibleLoadState === 'ready') return;
-    bibleLoadState = 'loading';
-    setScriptureStatus('Loading en_kjv.json…');
+    setScriptureStatus('Loading Bible…');
     renderScripturePlaceholder('Loading Scripture…');
 
-    fetch('en_kjv.json')
+    if (applyBibleData(window.__EWC_BIBLE_DATA__)) return;
+
+    bibleLoadState = 'loading';
+    loadBibleScript()
+      .then(() => applyBibleData(window.__EWC_BIBLE_DATA__) || fetchBibleJSON())
+      .catch(fetchBibleJSON)
+      .catch(err => {
+        console.warn('Could not load the Bible:', err);
+        promptForBibleFile();
+      })
+      .finally(() => { if (bibleLoadState === 'loading') promptForBibleFile(); });
+  }
+
+  /** Injects bible-data.js and resolves once it has run. */
+  function loadBibleScript() {
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'bible-data.js';
+      script.onload = resolve;
+      script.onerror = () => reject(new Error('bible-data.js not found'));
+      document.head.appendChild(script);
+    });
+  }
+
+  /** Fallback for a served folder with no bible-data.js beside the page. */
+  function fetchBibleJSON() {
+    if (location.protocol === 'file:') {
+      // Pointless here: browsers treat every local file as an opaque origin,
+      // so this can only fail. Skip the round trip and the console noise.
+      throw new Error('local files cannot be fetched');
+    }
+    return fetch('en_kjv.json')
       .then(response => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return response.json();
+        return response.text();
       })
-      .then(data => {
-        if (!Array.isArray(data) || data.length === 0) throw new Error('Unexpected file format');
-        bibleData = data;
-        bibleLoadState = 'ready';
-        populateScriptureBookSelect();
-        clampScriptureReference();
-        setScriptureStatus('');
-        renderScripture();
-      })
-      .catch(err => {
-        console.warn('Could not load en_kjv.json:', err);
-        bibleLoadState = 'error';
-        setScriptureStatus('Could not load en_kjv.json — check it sits next to this file, and that the page is served over http(s) rather than opened directly from disk.');
-        renderScripturePlaceholder('Scripture unavailable', 'Could not load en_kjv.json.');
-        el.scriptureBookSelect.innerHTML = '<option>Unavailable</option>';
+      .then(text => {
+        if (!applyBibleData(parseBibleJSON(text))) throw new Error('Unexpected file format');
       });
   }
 
@@ -1330,6 +1430,27 @@ hr.sep{
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') el.scriptureGoBtn.click();
     });
+  });
+
+  // Manual Bible load: the escape hatch for file:/// when bible-data.js
+  // isn't next to the page. Reading from a user-chosen File is allowed on
+  // file://, so this works where fetch('en_kjv.json') cannot.
+  el.chooseScriptureFileBtn.addEventListener('click', () => el.scriptureFileInput.click());
+
+  el.scriptureFileInput.addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    file.text()
+      .then(text => {
+        if (!applyBibleData(parseBibleJSON(text))) throw new Error('Unexpected file format');
+      })
+      .catch(err => {
+        console.warn('Could not read the chosen Bible file:', err);
+        setScriptureStatus(`Could not read ${file.name} — it doesn't look like the bible JSON format.`);
+        renderScripturePlaceholder('Scripture unavailable', 'Unreadable Bible file.');
+      })
+      // Clear the value so re-picking the same file fires 'change' again.
+      .finally(() => { el.scriptureFileInput.value = ''; });
   });
 
   /* -- Arrow-key navigation while the scripture card is on screen ------------

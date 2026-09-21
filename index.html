@@ -352,14 +352,6 @@ button, input{ font-family:inherit; }
   transition:opacity .35s ease;
 }
 
-.scripture-hint{
-  font-family:var(--font-display);
-  font-weight:500;
-  font-size:clamp(.7rem, 1vw, .85rem);
-  letter-spacing:.04em;
-  color:var(--cloud-faint);
-}
-
 /* ==========================================================================
    6. AMBIENT MICRO CLOCK (bottom-left) — small, quiet, always-on
    ========================================================================== */
@@ -488,6 +480,14 @@ body.ui-visible .chrome{
 }
 .field select{ cursor:pointer; }
 .field select:disabled{ opacity:.5; cursor:default; }
+/* The open dropdown is painted by the OS, not the page, and it was falling
+   back to a white list with the inherited white text — invisible until
+   hovered. Give the options the same navy as the settings panel so the
+   book names stay readable the whole time the list is open. */
+.field select option{
+  background:var(--navy-900);
+  color:var(--cloud);
+}
 /* Two side-by-side inputs, e.g. chapter + verse. */
 .field-row{ display:flex; gap:.6rem; }
 .field-row .field{ flex:1; }
@@ -604,7 +604,6 @@ hr.sep{
     <section id="scripture-view" class="panel scripture-panel">
       <p class="scripture-text" id="scripture-text">Loading Scripture…</p>
       <p class="scripture-reference" id="scripture-reference"></p>
-      <p class="scripture-hint" id="scripture-hint"></p>
     </section>
 
   </main>
@@ -815,7 +814,6 @@ hr.sep{
     scriptureView: document.getElementById('scripture-view'),
     scriptureText: document.getElementById('scripture-text'),
     scriptureReference: document.getElementById('scripture-reference'),
-    scriptureHint: document.getElementById('scripture-hint'),
 
     microTime: document.getElementById('micro-time'),
 
@@ -1344,7 +1342,6 @@ hr.sep{
   function renderScripturePlaceholder(text, reference) {
     el.scriptureText.textContent = text;
     el.scriptureReference.textContent = reference || '';
-    el.scriptureHint.textContent = '';
   }
 
   /** Crossfades the card's text out, swaps it, then fades back in — echoes
@@ -1372,7 +1369,6 @@ hr.sep{
     crossfadeScriptureText(() => {
       el.scriptureText.textContent = verseText;
       el.scriptureReference.textContent = reference;
-      el.scriptureHint.textContent = '← / → for the next or previous verse';
     });
 
     el.scriptureBookSelect.value = String(state.scriptureBookIndex);

@@ -352,6 +352,109 @@ button, input{ font-family:inherit; }
   transition:opacity .35s ease;
 }
 
+/* -- Lyrics view ------------------------------------------------------------
+   The focused line is the one being sung; the lines either side sit faint and
+   slightly shrunk, so the operator's eye is on the current line while the
+   congregation can still see what's coming.
+
+   How the glide stays smooth rather than wobbly:
+
+     1. The active line is emphasised with transform:scale, NOT font-size.
+        A transform never changes layout, so line boxes keep their height on
+        every step and the track's translate maths stays valid throughout.
+     2. Rows may be more than one line tall — a long worship line wraps rather
+        than being clipped — so the track is positioned from each row's own
+        measured offsetTop/offsetHeight instead of an assumed uniform stride.
+        That is why .lyric-line sets min-height, not height.
+
+   The scrollport is masked top and bottom, which is what makes the outgoing
+   and incoming lines trail off rather than being clipped at a hard edge. */
+#lyrics-view{ display:none; }
+
+.lyrics-panel{
+  /* A definite width, not just a max-width: .panel is a shrink-to-fit flex
+     item, so the scrollport's own width:100% has nothing to resolve against
+     and collapses — which would wrap every lyric into a sliver. */
+  width:min(82vw, 60rem);
+  max-width:100%;
+  /* Let the mask breathe over the panel's own padding. */
+  padding-inline:clamp(1.4rem, 4vw, 4rem);
+}
+
+.lyrics-title{
+  font-family:var(--font-display);
+  font-weight:600;
+  font-size:clamp(.85rem, 1.3vw, 1.2rem);
+  letter-spacing:.14em;
+  text-transform:uppercase;
+  color:var(--sunrise-amber);
+  text-align:center;
+  text-shadow:0 2px 12px rgba(0,0,0,.35);
+  transition:opacity .35s ease;
+}
+
+.lyrics-scrollport{
+  position:relative;
+  width:100%;
+  height:min(52vh, 26rem);
+  overflow:hidden;
+  /* Fades the neighbouring lines out towards the top and bottom edges. */
+  -webkit-mask-image:linear-gradient(to bottom,
+    transparent 0%, #000 22%, #000 78%, transparent 100%);
+  mask-image:linear-gradient(to bottom,
+    transparent 0%, #000 22%, #000 78%, transparent 100%);
+}
+
+.lyrics-track{
+  position:absolute;
+  top:0; left:0;
+  width:100%;
+  will-change:transform;
+  transition:transform .55s cubic-bezier(.22,.9,.3,1);
+}
+
+.lyric-line{
+  /* min-height, not height: a long line is allowed to wrap to a second row.
+     margin:0 matters too — each row is a <p>, and the default 1em vertical
+     margin would inflate the stride and collapse between siblings. */
+  min-height:clamp(2.6rem, 6.6vh, 4.8rem);
+  margin:0;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  text-align:center;
+  overflow-wrap:break-word;
+  font-family:var(--font-editorial);
+  font-weight:500;
+  font-size:clamp(1.05rem, 1.9vw, 2rem);
+  line-height:1.25;
+  color:var(--cloud);
+  opacity:.3;
+  transform:scale(.94);
+  transition:opacity .45s ease, transform .45s ease, color .45s ease;
+}
+
+.lyric-line.is-active{
+  opacity:1;
+  transform:scale(1.09);
+  font-weight:600;
+  text-shadow:0 2px 18px rgba(0,0,0,.45), 0 0 40px rgba(255,194,75,.22);
+}
+
+/* Lines already sung stay a touch dimmer than the ones still to come, which
+   quietly signals "we're here" as the song progresses. */
+.lyric-line.is-past{ opacity:.18; }
+
+.lyrics-empty{
+  font-family:var(--font-display);
+  font-weight:500;
+  font-size:clamp(.85rem, 1.2vw, 1.1rem);
+  color:var(--cloud-dim);
+  text-align:center;
+  max-width:34rem;
+  line-height:1.6;
+}
+
 /* ==========================================================================
    6. AMBIENT MICRO CLOCK (bottom-left) — small, quiet, always-on
    ========================================================================== */
@@ -544,6 +647,84 @@ body.ui-visible .chrome{
 
 input[type="file"]{ display:none; }
 
+/* -- Lyrics settings ------------------------------------------------------- */
+.field textarea{
+  background:rgba(248,249,253,.08);
+  border:1px solid var(--glass-border);
+  border-radius:.6rem;
+  padding:.6rem .7rem;
+  color:var(--cloud);
+  font-size:.88rem;
+  line-height:1.5;
+  font-family:inherit;
+  resize:vertical;
+  min-height:9rem;
+}
+.field textarea::placeholder{ color:var(--cloud-faint); }
+
+.song-list{
+  display:flex;
+  flex-direction:column;
+  gap:.35rem;
+  max-height:13rem;
+  overflow-y:auto;
+  padding:.15rem;
+  /* A slim scrollbar so the list doesn't visually shout next to the fields. */
+  scrollbar-width:thin;
+  scrollbar-color:rgba(248,249,253,.28) transparent;
+}
+.song-list::-webkit-scrollbar{ width:.4rem; }
+.song-list::-webkit-scrollbar-thumb{
+  background:rgba(248,249,253,.28);
+  border-radius:.2rem;
+}
+
+.song-item{
+  display:flex;
+  gap:.4rem;
+  align-items:stretch;
+}
+.song-item .song-load{
+  flex:1;
+  text-align:left;
+  padding:.5rem .65rem;
+  border-radius:.5rem;
+  border:1px solid transparent;
+  background:rgba(248,249,253,.06);
+  color:var(--cloud);
+  font-size:.83rem;
+  cursor:pointer;
+  transition:background .2s ease, border-color .2s ease;
+}
+.song-item .song-load:hover{ background:rgba(248,249,253,.14); }
+.song-item.is-active .song-load{
+  border-color:var(--sunrise-amber);
+  background:rgba(255,194,75,.14);
+}
+.song-item .song-delete{
+  flex:none;
+  width:2rem;
+  border-radius:.5rem;
+  border:1px solid var(--glass-border);
+  background:transparent;
+  color:var(--cloud-faint);
+  font-size:1rem;
+  line-height:1;
+  cursor:pointer;
+  transition:background .2s ease, color .2s ease;
+}
+.song-item .song-delete:hover{
+  background:rgba(242,112,27,.22);
+  color:var(--cloud);
+}
+
+.song-empty{
+  font-size:.78rem;
+  color:var(--cloud-faint);
+  padding:.4rem .2rem;
+  line-height:1.5;
+}
+
 .hint{
   font-size:.72rem;
   color:var(--cloud-faint);
@@ -566,6 +747,9 @@ hr.sep{
   .panel.is-complete .colon{ animation:none; }
   .digit-group{ transition:none; }
   .scripture-text, .scripture-reference{ transition:none; }
+  .lyrics-track{ transition:none; }
+  .lyric-line{ transition:none; }
+  .lyrics-title{ transition:none; }
   #settings-panel{ transition:none; }
   .chrome{ transition:none; }
 }
@@ -606,6 +790,14 @@ hr.sep{
       <p class="scripture-reference" id="scripture-reference"></p>
     </section>
 
+    <section id="lyrics-view" class="panel lyrics-panel">
+      <p class="lyrics-title" id="lyrics-title">Lyrics</p>
+      <div class="lyrics-scrollport" id="lyrics-scrollport">
+        <div class="lyrics-track" id="lyrics-track"><!-- lines injected by JS --></div>
+      </div>
+      <p class="lyrics-empty" id="lyrics-empty" hidden></p>
+    </section>
+
   </main>
 
   <p class="micro-time" id="micro-time"></p>
@@ -635,6 +827,7 @@ hr.sep{
         <button type="button" data-mode="timer" class="active">Countdown timer</button>
         <button type="button" data-mode="clock">Analog clock</button>
         <button type="button" data-mode="scripture">Scripture</button>
+        <button type="button" data-mode="lyrics">Lyrics</button>
       </div>
     </div>
 
@@ -677,6 +870,34 @@ hr.sep{
       <p class="hint" id="scripture-status" style="margin-top:.6rem;">Loading Bible…</p>
       <p class="hint">Only needed if the Bible doesn’t load on its own — pick <code>en_kjv.json</code> here, or serve this folder over http.</p>
       <p class="hint">While the scripture card is showing, use the ← and → arrow keys to step to the next or previous verse — no need to reopen this panel.</p>
+    </div>
+
+    <hr class="sep">
+
+    <div id="lyrics-fields">
+      <div class="field">
+        <label for="song-search-input">Find a song</label>
+        <input type="text" id="song-search-input" placeholder="Search by title…" autocomplete="off">
+      </div>
+
+      <div class="field" style="margin-top:1rem;">
+        <label>Songs</label>
+        <div class="song-list" id="song-list"><!-- built by JS --></div>
+      </div>
+
+      <hr class="sep" style="margin:.4rem 0;">
+
+      <div class="field">
+        <label for="song-title-input">Add a song</label>
+        <input type="text" id="song-title-input" maxlength="80" placeholder="Song title">
+      </div>
+      <div class="field" style="margin-top:.7rem;">
+        <label for="song-lyrics-input">Lyrics</label>
+        <textarea id="song-lyrics-input" placeholder="One line per row — each row shows on its own line."></textarea>
+      </div>
+      <button class="btn primary" id="song-save-btn" style="margin-top:.8rem;">Save song</button>
+      <p class="hint" id="song-status" style="margin-top:.6rem;"></p>
+      <p class="hint">Songs are saved on this device. While the lyrics are showing, use the ↑ and ↓ arrow keys to move a line at a time.</p>
     </div>
 
     <hr class="sep">
@@ -753,8 +974,9 @@ hr.sep{
     return result;
   }
 
-  /** @type {{mode:'timer'|'clock'|'scripture', eventName:string, targetISO:string, hasCustomBg:boolean,
-              scriptureBookIndex:number, scriptureChapter:number, scriptureVerse:number}} */
+  /** @type {{mode:'timer'|'clock'|'scripture'|'lyrics', eventName:string, targetISO:string, hasCustomBg:boolean,
+              scriptureBookIndex:number, scriptureChapter:number, scriptureVerse:number,
+              activeSongId:string|null, lyricLineIndex:number}} */
   let state = {
     mode: 'timer',
     eventName: 'Sunday Service',
@@ -763,7 +985,11 @@ hr.sep{
     // Genesis 2:4 — a friendly starting reference, shown once en_kjv.json loads.
     scriptureBookIndex: 0,
     scriptureChapter: 2,
-    scriptureVerse: 4
+    scriptureVerse: 4,
+    // The song currently on screen (null = none chosen yet) and which of its
+    // lines is the "current" one.
+    activeSongId: null,
+    lyricLineIndex: 0
   };
 
   /** Loads any previously saved (small, text-only) settings for this device. */
@@ -783,9 +1009,11 @@ hr.sep{
   /** Persists the small text settings (never the background image itself). */
   function savePersistedState() {
     try {
-      const { mode, eventName, targetISO, scriptureBookIndex, scriptureChapter, scriptureVerse } = state;
+      const { mode, eventName, targetISO, scriptureBookIndex, scriptureChapter, scriptureVerse,
+              activeSongId, lyricLineIndex } = state;
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        mode, eventName, targetISO, scriptureBookIndex, scriptureChapter, scriptureVerse
+        mode, eventName, targetISO, scriptureBookIndex, scriptureChapter, scriptureVerse,
+        activeSongId, lyricLineIndex
       }));
     } catch (err) {
       console.warn('Could not save settings:', err);
@@ -815,6 +1043,12 @@ hr.sep{
     scriptureText: document.getElementById('scripture-text'),
     scriptureReference: document.getElementById('scripture-reference'),
 
+    lyricsView: document.getElementById('lyrics-view'),
+    lyricsTitle: document.getElementById('lyrics-title'),
+    lyricsScrollport: document.getElementById('lyrics-scrollport'),
+    lyricsTrack: document.getElementById('lyrics-track'),
+    lyricsEmpty: document.getElementById('lyrics-empty'),
+
     microTime: document.getElementById('micro-time'),
 
     fullscreenBtn: document.getElementById('fullscreen-btn'),
@@ -834,6 +1068,13 @@ hr.sep{
     scriptureStatus: document.getElementById('scripture-status'),
     chooseScriptureFileBtn: document.getElementById('choose-scripture-file-btn'),
     scriptureFileInput: document.getElementById('scripture-file-input'),
+
+    songSearchInput: document.getElementById('song-search-input'),
+    songList: document.getElementById('song-list'),
+    songTitleInput: document.getElementById('song-title-input'),
+    songLyricsInput: document.getElementById('song-lyrics-input'),
+    songSaveBtn: document.getElementById('song-save-btn'),
+    songStatus: document.getElementById('song-status'),
 
     chooseImageBtn: document.getElementById('choose-image-btn'),
     clearImageBtn: document.getElementById('clear-image-btn'),
@@ -1464,7 +1705,295 @@ hr.sep{
   });
 
   /* ==========================================================================
-     7. BACKGROUND IMAGE HANDLING
+     7. LYRICS
+     A small on-device song library plus the Spotify-style presentation: one
+     line in focus, the lines around it faint, stepped with the arrow keys.
+
+     Songs live in localStorage rather than the settings blob. Lyrics are far
+     bigger than everything else the display stores, and keeping them in their
+     own key means a corrupt or oversized song can never take the timer
+     settings down with it.
+     ========================================================================== */
+
+  const SONGS_KEY = 'ewc-display-songs-v1';
+
+  /** @type {Array<{id:string, title:string, lines:string[], updatedAt:number}>} */
+  let songs = [];
+
+  function loadSongs() {
+    try {
+      const raw = localStorage.getItem(SONGS_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      if (Array.isArray(saved)) songs = saved.filter(isUsableSong);
+    } catch (err) {
+      console.warn('Could not load saved songs:', err);
+    }
+  }
+
+  /** Guards against a hand-edited or partially written storage entry. */
+  function isUsableSong(song) {
+    return song && typeof song.id === 'string' && typeof song.title === 'string'
+      && Array.isArray(song.lines) && song.lines.every(line => typeof line === 'string');
+  }
+
+  function saveSongs() {
+    try {
+      localStorage.setItem(SONGS_KEY, JSON.stringify(songs));
+      return true;
+    } catch (err) {
+      // Quota is the realistic failure here — lyrics add up.
+      console.warn('Could not save songs:', err);
+      setSongStatus('Could not save — this browser’s storage is full.');
+      return false;
+    }
+  }
+
+  function findSong(id) {
+    return songs.find(song => song.id === id) || null;
+  }
+
+  function getActiveSong() {
+    return findSong(state.activeSongId);
+  }
+
+  /** Splits the textarea into display lines: one row per line, blank rows
+   *  dropped (they'd otherwise render as empty gaps in the lyric column). */
+  function splitLyricLines(text) {
+    return text
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(line => line.length > 0);
+  }
+
+  function makeSongId() {
+    return `song-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+  }
+
+  function setSongStatus(message) {
+    el.songStatus.textContent = message || '';
+    el.songStatus.style.display = message ? 'block' : 'none';
+  }
+
+  /** Renders the song library, filtered by the search box. */
+  function renderSongList() {
+    const query = el.songSearchInput.value.trim().toLowerCase();
+    const matches = query
+      ? songs.filter(song => song.title.toLowerCase().includes(query))
+      : songs.slice();
+
+    matches.sort((a, b) => a.title.localeCompare(b.title));
+
+    el.songList.innerHTML = '';
+
+    if (!matches.length) {
+      const empty = document.createElement('p');
+      empty.className = 'song-empty';
+      empty.textContent = songs.length
+        ? `No songs match “${el.songSearchInput.value.trim()}”.`
+        : 'No songs saved yet — add one below.';
+      el.songList.appendChild(empty);
+      return;
+    }
+
+    matches.forEach(song => {
+      const row = document.createElement('div');
+      row.className = 'song-item' + (song.id === state.activeSongId ? ' is-active' : '');
+
+      const load = document.createElement('button');
+      load.type = 'button';
+      load.className = 'song-load';
+      load.textContent = song.title;
+      load.title = `Show ${song.title}`;
+      load.addEventListener('click', () => {
+        // Choosing a song from the library puts it straight on screen.
+        showSong(song.id);
+        setMode('lyrics');
+      });
+
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'song-delete';
+      remove.textContent = '×';
+      remove.title = `Delete ${song.title}`;
+      remove.setAttribute('aria-label', `Delete ${song.title}`);
+      remove.addEventListener('click', () => deleteSong(song.id));
+
+      row.appendChild(load);
+      row.appendChild(remove);
+      el.songList.appendChild(row);
+    });
+  }
+
+  function saveSongFromForm() {
+    const title = el.songTitleInput.value.trim();
+    const lines = splitLyricLines(el.songLyricsInput.value);
+
+    if (!title) {
+      setSongStatus('Give the song a title first.');
+      el.songTitleInput.focus();
+      return;
+    }
+    if (!lines.length) {
+      setSongStatus('Add at least one line of lyrics.');
+      el.songLyricsInput.focus();
+      return;
+    }
+
+    // Same title = an edit, so re-saving a song updates it instead of
+    // silently piling up duplicates in the library.
+    const existing = songs.find(song => song.title.toLowerCase() === title.toLowerCase());
+    const song = existing || { id: makeSongId(), title, lines: [], updatedAt: 0 };
+
+    song.title = title;
+    song.lines = lines;
+    song.updatedAt = Date.now();
+    if (!existing) songs.push(song);
+
+    if (!saveSongs()) return;
+
+    el.songTitleInput.value = '';
+    el.songLyricsInput.value = '';
+    setSongStatus(existing ? `Updated “${title}”.` : `Saved “${title}”.`);
+
+    // Put a freshly saved song on screen — the operator almost always wants
+    // to see it next.
+    showSong(song.id);
+    renderSongList();
+    setMode('lyrics');
+  }
+
+  function deleteSong(id) {
+    const song = findSong(id);
+    if (!song) return;
+
+    songs = songs.filter(candidate => candidate.id !== id);
+
+    if (state.activeSongId === id) {
+      state.activeSongId = null;
+      state.lyricLineIndex = 0;
+    }
+
+    saveSongs();
+    renderSongList();
+    renderLyrics();
+    savePersistedState();
+  }
+
+  /** Makes a song the active one and puts the display back on its first line. */
+  function showSong(id) {
+    if (!findSong(id)) return;
+    state.activeSongId = id;
+    state.lyricLineIndex = 0;
+    renderLyrics();
+    renderSongList();
+    savePersistedState();
+  }
+
+  /** Steps the focused line by `direction`, stopping at the ends of the song.
+   *  Unlike the scripture card this deliberately does NOT wrap: running off
+   *  the last line back to the top mid-service would be worse than nothing. */
+  function goToAdjacentLyricLine(direction) {
+    const song = getActiveSong();
+    if (!song) return;
+
+    const next = state.lyricLineIndex + direction;
+    if (next < 0 || next >= song.lines.length) return;
+
+    state.lyricLineIndex = next;
+    applyLyricFocus();
+    savePersistedState();
+  }
+
+  /** Builds the lyric column for the active song. Rebuilt only when the song
+   *  changes — stepping lines just re-applies classes and the track offset. */
+  function renderLyrics() {
+    const song = getActiveSong();
+
+    if (!song) {
+      el.lyricsTitle.textContent = 'Lyrics';
+      el.lyricsScrollport.hidden = true;
+      el.lyricsEmpty.hidden = false;
+      el.lyricsEmpty.textContent = songs.length
+        ? 'Pick a song in settings to show its lyrics.'
+        : 'No songs saved yet — add one in settings.';
+      el.lyricsTrack.innerHTML = '';
+      return;
+    }
+
+    el.lyricsTitle.textContent = song.title;
+    el.lyricsEmpty.hidden = true;
+    el.lyricsScrollport.hidden = false;
+    el.lyricsTrack.innerHTML = '';
+
+    song.lines.forEach(line => {
+      const p = document.createElement('p');
+      p.className = 'lyric-line';
+      p.textContent = line;
+      el.lyricsTrack.appendChild(p);
+    });
+
+    applyLyricFocus();
+  }
+
+  /** Marks the current line and slides the track so it sits centred.
+   *
+   *  Position comes from the active row's own offsetTop/offsetHeight rather
+   *  than "index × line height": a long lyric wraps to two rows, so the stride
+   *  is not uniform and an assumed one would land off-centre on exactly the
+   *  lines that need it most. offsetTop/offsetHeight are layout values, so the
+   *  0.94/1.09 scale transforms don't distort them. */
+  function applyLyricFocus() {
+    const song = getActiveSong();
+    if (!song) return;
+
+    // Defensive: a restored index could be stale if the song was re-saved.
+    if (state.lyricLineIndex >= song.lines.length) state.lyricLineIndex = 0;
+
+    const lines = el.lyricsTrack.children;
+    for (let i = 0; i < lines.length; i++) {
+      lines[i].classList.toggle('is-active', i === state.lyricLineIndex);
+      lines[i].classList.toggle('is-past', i < state.lyricLineIndex);
+    }
+
+    const active = lines[state.lyricLineIndex];
+    if (!active) return;
+
+    const rowTop = active.offsetTop;
+    const rowHeight = active.offsetHeight;
+    const viewportHeight = el.lyricsScrollport.clientHeight;
+    const offset = rowTop + rowHeight / 2 - viewportHeight / 2;
+
+    el.lyricsTrack.style.transform = `translateY(${-offset}px)`;
+  }
+
+  /* -- Settings wiring ------------------------------------------------------ */
+
+  el.songSearchInput.addEventListener('input', renderSongList);
+  el.songSaveBtn.addEventListener('click', saveSongFromForm);
+  el.songLyricsInput.addEventListener('keydown', (e) => {
+    // Ctrl/Cmd+Enter saves, so a song can be entered without reaching for the mouse.
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      saveSongFromForm();
+    }
+  });
+
+  /* -- Arrow-key navigation while the lyrics are on screen -------------------
+     Same guards as the scripture card: only when lyrics are showing, and never
+     while an editable field has focus. */
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    if (state.mode !== 'lyrics') return;
+    const focusedTag = document.activeElement && document.activeElement.tagName;
+    if (focusedTag === 'INPUT' || focusedTag === 'SELECT' || focusedTag === 'TEXTAREA') return;
+
+    e.preventDefault();
+    goToAdjacentLyricLine(e.key === 'ArrowDown' ? 1 : -1);
+  });
+
+  /* ==========================================================================
+     8. BACKGROUND IMAGE HANDLING
      ========================================================================== */
 
   let currentObjectURL = null;
@@ -1515,14 +2044,17 @@ hr.sep{
   el.closeSettingsBtn.addEventListener('click', closeSettings);
   el.doneBtn.addEventListener('click', closeSettings);
 
-  /** Switches between the countdown timer, the analog clock, and the scripture card. */
+  /** Switches between the countdown timer, the analog clock, the scripture
+   *  card and the lyrics view. */
   function setMode(mode) {
     state.mode = mode;
     el.timerView.style.display = mode === 'timer' ? 'flex' : 'none';
     el.clockView.style.display = mode === 'clock' ? 'flex' : 'none';
     el.scriptureView.style.display = mode === 'scripture' ? 'flex' : 'none';
+    el.lyricsView.style.display = mode === 'lyrics' ? 'flex' : 'none';
     document.getElementById('timer-fields').style.opacity = mode === 'timer' ? '1' : '.4';
     document.getElementById('scripture-fields').style.opacity = mode === 'scripture' ? '1' : '.4';
+    document.getElementById('lyrics-fields').style.opacity = mode === 'lyrics' ? '1' : '.4';
 
     el.modeToggleGroup.querySelectorAll('button').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.mode === mode);
@@ -1538,6 +2070,14 @@ hr.sep{
     }
     if (mode === 'scripture') {
       loadBibleData(); // no-op after the first call — see its own guard
+    }
+    if (mode === 'lyrics') {
+      // The scrollport's own height is resolved once it is actually on
+      // screen, so the track offset has to be recomputed after that flip —
+      // otherwise a restore straight into lyrics mode centres against a
+      // zero-height box.
+      renderLyrics();
+      requestAnimationFrame(applyLyricFocus);
     }
     savePersistedState();
   }
@@ -1641,6 +2181,9 @@ hr.sep{
   function handleResize() {
     particles.resize();
     analogClock.resize();
+    // Line height is a clamp() on vh, so the lyric track has to be
+    // re-centred whenever the stage changes size.
+    if (state.mode === 'lyrics') applyLyricFocus();
   }
 
   let resizeDebounce = null;
@@ -1656,11 +2199,13 @@ hr.sep{
 
   function init() {
     loadPersistedState();
+    loadSongs();
 
     el.eventNameInput.value = state.eventName;
     el.targetDatetimeInput.value = toDatetimeLocalValue(new Date(state.targetISO));
     el.scriptureChapterInput.value = state.scriptureChapter;
     el.scriptureVerseInput.value = state.scriptureVerse;
+    renderSongList();
     setMode(state.mode); // also kicks off the (lazy) Bible data load if restoring into scripture mode
 
     handleResize();

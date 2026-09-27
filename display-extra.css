@@ -1,0 +1,51 @@
+/* ============================================================================
+   DISPLAY — page-level additions on top of display.css
+
+   Two jobs only:
+
+     1. Preview scaling. The console embeds this page in an iframe and adds
+        `.is-preview` to <body>. The stage keeps its true 16:9 pixel size
+        (1600×900 — the same frame the projector shows, so nothing reflows or
+        re-wraps on launch) and is shrunk to whatever fits with a transform.
+        The console sets --preview-scale; the transform origin is the top-left
+        corner because display.js uses that same corner for its clip maths.
+
+     2. A little breathing room for very long scripture verses, which
+        display.js shrinks to fit rather than letting them spill off-screen.
+   ========================================================================== */
+
+body.is-preview{ cursor:auto; }   /* the pointer belongs to the console again */
+body.is-preview #display{ pointer-events:none; }
+
+/* The stage's *layout* box is a full 1600×900 even after the preview
+   transform, so without clipping the iframe would grow a scrollbar for
+   overflow that the transform has already scaled away. */
+body.is-preview{ overflow:hidden; }
+
+/* The same 16:9 stage, shrunk to fit the console's preview pane. Keeping the
+   stage at its real 1600×900 size and scaling with a transform — rather than
+   re-deriving it from the viewport — means the preview reflows exactly as the
+   projection does, so nothing is approved that then changes on launch. */
+body.is-preview #stage{
+  /* flex:none matters: #stage is a flex item of body, and without it the
+     default flex-shrink would squash the 1600px width down to the frame,
+     breaking the 16:9 frame before the transform ever runs. */
+  flex:none;
+  width:1600px;
+  height:900px;
+  transform:scale(var(--preview-scale, 0.5));
+  transform-origin:center center;
+  box-shadow:none;
+}
+
+/* A long verse is shrunk by display.js rather than being allowed to run off
+   the bottom of the panel, but leave the copy some room to breathe first. */
+.scripture-text{ max-width:min(72vw, 48rem); }
+
+/* When the focused lyric is tall enough to overflow the scrollport (a long
+   line wrapping to three rows), pull the type in so the current line is never
+   cut in half. display.js toggles the class. */
+.lyrics-scrollport.is-tight .lyric-line{
+  font-size:clamp(.9rem, 1.5vw, 1.5rem);
+  min-height:clamp(2.2rem, 5vh, 3.4rem);
+}

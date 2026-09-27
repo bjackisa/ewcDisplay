@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Exploits Worship Centre — Control Room</title>
+
+<!-- Google Fonts: Space Grotesk for numerals/UI, Fraunces for warm editorial labels -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,500;0,600;1,500;1,600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="display.css">       <!-- the design tokens + stage -->
+<link rel="stylesheet" href="console.base.css">  <!-- the original form controls -->
+<link rel="stylesheet" href="console.css">       <!-- the control-room layout -->
+</head>
+<body class="console">
+
+<div class="console">
+
+  <header class="console__bar">
+    <span class="console__brand">
+      <img src="crest.png" alt="">
+      <span class="console__brand-text">Exploits Worship Centre<small>Control room</small></span>
+    </span>
+
+    <span class="console__link" id="link-status" data-state="waiting">
+      <span class="dot"></span><span id="link-status-text">Looking for the display…</span>
+    </span>
+
+    <div class="console__bar-actions">
+      <button class="btn" id="open-display-btn" title="Open the projection window for the extended screen">Open display window</button>
+      <button class="btn primary" id="launch-btn">Launch</button>
+    </div>
+  </header>
+
+  <div class="console__body">
+
+    <!-- ------------------------------------------------------------------ -->
+    <!-- Controls. The same fields the display used to hide behind its gear  -->
+    <!-- icon, now permanently in front of the operator. Every change shows  -->
+    <!-- in the preview; Launch sends it to the church screen.              -->
+    <!-- ------------------------------------------------------------------ -->
+    <aside id="settings-panel">
+
+      <div class="field">
+        <label>Show</label>
+        <div class="segmented" id="mode-toggle-group" role="group">
+          <button type="button" data-mode="timer" class="active">Countdown timer</button>
+          <button type="button" data-mode="clock">Analog clock</button>
+          <button type="button" data-mode="scripture">Scripture</button>
+          <button type="button" data-mode="lyrics">Lyrics</button>
+        </div>
+      </div>
+
+      <hr class="sep">
+
+      <div id="timer-fields">
+        <div class="field">
+          <label for="event-name-input">Event name</label>
+          <input type="text" id="event-name-input" maxlength="60" placeholder="Sunday Service">
+        </div>
+        <div class="field" style="margin-top:1rem;">
+          <label for="target-datetime-input">Date &amp; time</label>
+          <input type="datetime-local" id="target-datetime-input">
+        </div>
+        <button class="btn" id="next-sunday-btn" style="margin-top:.8rem;">Set to next Sunday, 9:00 AM</button>
+        <p class="hint">The countdown runs live on both screens — the timer never needs launching to stay accurate.</p>
+      </div>
+
+      <hr class="sep">
+
+      <div id="scripture-fields">
+        <div class="field">
+          <label for="scripture-book-select">Book</label>
+          <select id="scripture-book-select" disabled>
+            <option>Loading Bible data…</option>
+          </select>
+        </div>
+        <div class="field-row" style="margin-top:1rem;">
+          <div class="field">
+            <label for="scripture-chapter-input">Chapter</label>
+            <input type="number" id="scripture-chapter-input" min="1" step="1" inputmode="numeric">
+          </div>
+          <div class="field">
+            <label for="scripture-verse-input">Verse</label>
+            <input type="number" id="scripture-verse-input" min="1" step="1" inputmode="numeric">
+          </div>
+        </div>
+        <button class="btn" id="scripture-go-btn" style="margin-top:.8rem;">Review verse</button>
+        <button class="btn" id="choose-scripture-file-btn" style="margin-top:.5rem;">Choose en_kjv.json…</button>
+        <input type="file" id="scripture-file-input" accept="application/json,.json">
+        <p class="hint" id="scripture-status" style="margin-top:.6rem;">Loading Bible…</p>
+        <p class="hint">Review a verse here, then Launch it. Once it is live, the ← and → keys (or the ‹ › buttons above the preview) step through verses without launching each one.</p>
+      </div>
+
+      <hr class="sep">
+
+      <div id="lyrics-fields">
+        <div class="field">
+          <label for="song-search-input">Find a song</label>
+          <input type="text" id="song-search-input" placeholder="Search by title…" autocomplete="off">
+        </div>
+
+        <div class="field" style="margin-top:1rem;">
+          <label>Songs</label>
+          <div class="song-list" id="song-list"><!-- built by JS --></div>
+        </div>
+
+        <hr class="sep" style="margin:.4rem 0;">
+
+        <div class="field">
+          <label for="song-title-input">Add a song</label>
+          <input type="text" id="song-title-input" maxlength="80" placeholder="Song title">
+        </div>
+        <div class="field" style="margin-top:.7rem;">
+          <label for="song-lyrics-input">Lyrics</label>
+          <textarea id="song-lyrics-input" placeholder="One line per row — each row shows on its own line."></textarea>
+        </div>
+        <button class="btn primary" id="song-save-btn" style="margin-top:.8rem;">Save song</button>
+        <p class="hint" id="song-status" style="margin-top:.6rem;"></p>
+        <p class="hint">Songs are saved on this device. Once lyrics are live, the ↑ and ↓ keys (or the ‹ › buttons above the preview) move a line at a time.</p>
+      </div>
+
+      <hr class="sep">
+
+      <div class="field">
+        <label>Background image</label>
+        <div class="file-row">
+          <button class="btn" id="choose-image-btn">Choose image…</button>
+          <button class="btn" id="clear-image-btn">Remove</button>
+        </div>
+        <input type="file" id="bg-file-input" accept="image/*">
+        <p class="hint">Used behind the glass panel. If none is chosen, an ambient sunrise scene is shown instead. Changes go straight to the screen.</p>
+      </div>
+
+      <hr class="sep">
+
+      <p class="hint" id="shortcut-hint">
+        Shortcuts: <b>→</b>/<b>←</b> step verses, <b>↓</b>/<b>↑</b> step lyric lines,
+        <b>Ctrl/⌘+Enter</b> saves a song, <b>Space</b> launches. Live changes never
+        interrupt the screen — only what you launch appears.
+      </p>
+
+    </aside>
+
+    <!-- ------------------------------------------------------------------ -->
+    <!-- Preview. An iframe of display.html — the exact page that goes to    -->
+    <!-- the church screen — shrunk to fit. Nothing here reaches the screen  -->
+    <!-- until Launch is pressed.                                            -->
+    <!-- ------------------------------------------------------------------ -->
+    <main class="console__preview">
+      <div class="preview-toolbar">
+        <span class="preview-toolbar__label">Preview</span>
+        <span class="preview-toolbar__hint" id="preview-note">Not launched — the screen is showing the previous item.</span>
+        <div class="preview-toolbar__steps">
+          <button class="btn" id="prev-btn" title="Previous (← or ↑)">‹</button>
+          <button class="btn" id="next-btn" title="Next (→ or ↓)">›</button>
+        </div>
+      </div>
+      <div class="preview-frame" id="preview-frame">
+        <iframe id="preview" src="display.html?preview=1" title="Display preview"></iframe>
+      </div>
+    </main>
+
+  </div>
+</div>
+
+<script src="display-common.js"></script>
+<script src="console.js"></script>
+</body>
+</html>

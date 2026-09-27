@@ -1,0 +1,192 @@
+/* ============================================================================
+   CONSOLE — the control-room layout
+
+   console.base.css carries over the original settings-drawer styling (fields,
+   buttons, song list). This file turns that drawer into a permanently open
+   left rail and gives the right-hand side over to a live preview of the
+   projection, plus a slim top bar carrying the link state and Launch.
+   ========================================================================== */
+
+html, body{
+  height:100%;
+  margin:0;
+}
+
+body.console{
+  background:var(--navy-950);
+  overflow:hidden;
+  display:block; /* undo the display page's centred full-bleed body */
+}
+
+.console{
+  height:100vh;
+  display:flex;
+  flex-direction:column;
+}
+
+/* --------------------------------------------------------------------------
+   Top bar
+   -------------------------------------------------------------------------- */
+.console__bar{
+  flex:none;
+  display:flex;
+  align-items:center;
+  gap:1rem;
+  padding:.7rem 1.1rem;
+  background:linear-gradient(180deg, rgba(11,21,51,.96), rgba(7,11,26,.96));
+  border-bottom:1px solid var(--glass-border);
+  z-index:3;
+}
+
+.console__brand{
+  display:flex;
+  align-items:center;
+  gap:.6rem;
+  min-width:0;
+}
+.console__brand img{
+  width:2.1rem; height:2.1rem;
+  object-fit:contain;
+  border-radius:.4rem;
+}
+.console__brand-text{
+  display:flex;
+  flex-direction:column;
+  line-height:1.1;
+  font-family:var(--font-editorial);
+  font-style:italic;
+  font-weight:600;
+  color:var(--cloud);
+  white-space:nowrap;
+}
+.console__brand-text small{
+  font-family:var(--font-display);
+  font-style:normal;
+  font-weight:500;
+  font-size:.68rem;
+  letter-spacing:.14em;
+  text-transform:uppercase;
+  color:var(--sunrise-amber);
+}
+
+.console__link{
+  display:flex;
+  align-items:center;
+  gap:.45rem;
+  font-size:.78rem;
+  color:var(--cloud-dim);
+  margin-left:.4rem;
+}
+.console__link .dot{
+  width:.55rem; height:.55rem;
+  border-radius:50%;
+  background:var(--cloud-faint);
+  box-shadow:0 0 0 0 rgba(255,194,75,.5);
+}
+.console__link[data-state="waiting"] .dot{ background:#e2b53a; animation:pulse 1.4s ease-in-out infinite; }
+.console__link[data-state="ok"] .dot{ background:#4cc38a; }
+.console__link[data-state="lost"] .dot{ background:#e06a5a; }
+@keyframes pulse{
+  0%,100%{ box-shadow:0 0 0 0 rgba(255,194,75,.5); }
+  50%{ box-shadow:0 0 0 .4rem rgba(255,194,75,0); }
+}
+
+.console__bar-actions{
+  margin-left:auto;
+  display:flex;
+  gap:.5rem;
+  align-items:center;
+}
+.console__bar-actions .btn{ flex:none; white-space:nowrap; }
+
+/* --------------------------------------------------------------------------
+   Body: controls rail + preview
+   -------------------------------------------------------------------------- */
+.console__body{
+  flex:1;
+  min-height:0;
+  display:flex;
+}
+
+/* The controls rail reuses the old #settings-panel look, but it is no longer
+   an overlay that slides in — it sits permanently open beside the preview. */
+#settings-panel{
+  position:static;
+  transform:none;
+  top:auto; right:auto;
+  width:min(26rem, 40vw);
+  flex:none;
+  height:100%;
+  border-left:none;
+  border-right:1px solid var(--glass-border);
+}
+
+/* --------------------------------------------------------------------------
+   Preview
+   -------------------------------------------------------------------------- */
+.console__preview{
+  flex:1;
+  min-width:0;
+  display:flex;
+  flex-direction:column;
+  padding:1rem;
+  gap:.7rem;
+}
+
+.preview-toolbar{
+  flex:none;
+  display:flex;
+  align-items:center;
+  gap:.7rem;
+}
+.preview-toolbar__label{
+  font-family:var(--font-editorial);
+  font-style:italic;
+  font-weight:600;
+  font-size:1.1rem;
+  color:var(--cloud);
+}
+.preview-toolbar__hint{
+  font-size:.75rem;
+  color:var(--cloud-faint);
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.preview-toolbar__hint[data-state="live"]{ color:var(--sunrise-amber); }
+.preview-toolbar__steps{
+  margin-left:auto;
+  display:flex;
+  gap:.4rem;
+}
+.preview-toolbar__steps .btn{
+  flex:none;
+  width:2.6rem;
+  font-size:1.1rem;
+  line-height:1;
+  padding:.35rem 0;
+}
+
+/* The frame is a 16:9 letterbox, matching the projection exactly. The iframe
+   inside is a true 1600×900 stage scaled to fit (see display-extra.css), so
+   the preview never reflows the layout the congregation will see. */
+.preview-frame{
+  flex:1;
+  min-height:0;
+  position:relative;
+  overflow:hidden;
+  border-radius:.9rem;
+  border:1px solid var(--glass-border);
+  background:var(--navy-950);
+  box-shadow:0 30px 70px -40px var(--glass-shadow);
+}
+
+.preview-frame iframe{
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  border:0;
+  display:block;
+}

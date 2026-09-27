@@ -1,0 +1,269 @@
+/* ==========================================================================
+   7. CONTROLS — fullscreen + settings, auto-hidden until the pointer moves
+   ========================================================================== */
+.chrome{
+  position:absolute;
+  right:clamp(1.1rem, 2.6vw, 2.6rem);
+  bottom:clamp(1.1rem, 2.6vh, 2.6rem);
+  z-index:6;
+  display:flex;
+  gap:.6rem;
+  opacity:0;
+  transform:translateY(6px);
+  pointer-events:none;
+  transition:opacity .4s ease, transform .4s ease;
+}
+
+body.ui-visible .chrome{
+  opacity:1;
+  transform:translateY(0);
+  pointer-events:auto;
+}
+
+.icon-btn{
+  width:clamp(2.4rem, 3vw, 3rem);
+  height:clamp(2.4rem, 3vw, 3rem);
+  border-radius:50%;
+  border:1px solid var(--glass-border);
+  background:var(--glass-fill-strong);
+  backdrop-filter:blur(18px) saturate(160%);
+  -webkit-backdrop-filter:blur(18px) saturate(160%);
+  color:var(--cloud);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  transition:background .2s ease, transform .2s ease;
+}
+.icon-btn:hover{ background:rgba(248,249,253,.2); transform:translateY(-2px); }
+.icon-btn svg{ width:46%; height:46%; }
+
+/* ==========================================================================
+   8. SETTINGS DRAWER
+   ========================================================================== */
+#settings-panel{
+  position:absolute;
+  top:0; right:0;
+  height:100%;
+  width:min(23rem, 88vw);
+  z-index:10;
+  background:linear-gradient(165deg, rgba(11,21,51,.92), rgba(7,11,26,.96));
+  border-left:1px solid var(--glass-border);
+  backdrop-filter:blur(24px);
+  -webkit-backdrop-filter:blur(24px);
+  padding:1.6rem 1.5rem;
+  overflow-y:auto;
+  transform:translateX(100%);
+  transition:transform .35s cubic-bezier(.22,.9,.3,1);
+  display:flex;
+  flex-direction:column;
+  gap:1.3rem;
+}
+
+#settings-panel.open{ transform:translateX(0); }
+
+.settings-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+}
+
+.settings-header h2{
+  margin:0;
+  font-family:var(--font-editorial);
+  font-style:italic;
+  font-weight:600;
+  font-size:1.35rem;
+  color:var(--cloud);
+}
+
+.field{ display:flex; flex-direction:column; gap:.45rem; }
+
+.field label{
+  font-size:.8rem;
+  color:var(--cloud-dim);
+  letter-spacing:.02em;
+}
+
+.field input[type="text"],
+.field input[type="datetime-local"]{
+  background:rgba(248,249,253,.08);
+  border:1px solid var(--glass-border);
+  border-radius:.6rem;
+  padding:.6rem .7rem;
+  color:var(--cloud);
+  font-size:.92rem;
+}
+
+.field input::-webkit-calendar-picker-indicator{ filter:invert(1) brightness(1.6); }
+
+.field input[type="number"],
+.field select{
+  background:rgba(248,249,253,.08);
+  border:1px solid var(--glass-border);
+  border-radius:.6rem;
+  padding:.6rem .7rem;
+  color:var(--cloud);
+  font-size:.92rem;
+  width:100%;
+}
+.field select{ cursor:pointer; }
+.field select:disabled{ opacity:.5; cursor:default; }
+/* The open dropdown is painted by the OS, not the page, and it was falling
+   back to a white list with the inherited white text — invisible until
+   hovered. Give the options the same navy as the settings panel so the
+   book names stay readable the whole time the list is open. */
+.field select option{
+  background:var(--navy-900);
+  color:var(--cloud);
+}
+/* Two side-by-side inputs, e.g. chapter + verse. */
+.field-row{ display:flex; gap:.6rem; }
+.field-row .field{ flex:1; }
+
+.segmented{
+  display:flex;
+  border:1px solid var(--glass-border);
+  border-radius:.7rem;
+  overflow:hidden;
+}
+.segmented button{
+  flex:1;
+  padding:.6rem .5rem;
+  background:transparent;
+  border:none;
+  color:var(--cloud-dim);
+  font-size:.85rem;
+  cursor:pointer;
+  transition:background .2s ease, color .2s ease;
+}
+.segmented button.active{
+  background:linear-gradient(135deg, var(--sunrise-orange), var(--sunrise-amber));
+  color:var(--navy-950);
+  font-weight:600;
+}
+
+.file-row{ display:flex; gap:.5rem; }
+
+.btn{
+  flex:1;
+  padding:.6rem .8rem;
+  border-radius:.6rem;
+  border:1px solid var(--glass-border);
+  background:rgba(248,249,253,.08);
+  color:var(--cloud);
+  font-size:.83rem;
+  cursor:pointer;
+  text-align:center;
+  transition:background .2s ease;
+}
+.btn:hover{ background:rgba(248,249,253,.16); }
+.btn.primary{
+  background:linear-gradient(135deg, var(--sunrise-orange), var(--sunrise-amber));
+  color:var(--navy-950);
+  font-weight:600;
+  border:none;
+}
+.btn.primary:hover{ filter:brightness(1.06); }
+
+/* #done-btn sits as a direct child of the column-flex settings panel, so
+   without this it inherits .btn's flex:1 and stretches to fill all
+   remaining vertical space instead of sizing to its own content. */
+#done-btn{ flex:none; }
+
+input[type="file"]{ display:none; }
+
+/* -- Lyrics settings ------------------------------------------------------- */
+.field textarea{
+  background:rgba(248,249,253,.08);
+  border:1px solid var(--glass-border);
+  border-radius:.6rem;
+  padding:.6rem .7rem;
+  color:var(--cloud);
+  font-size:.88rem;
+  line-height:1.5;
+  font-family:inherit;
+  resize:vertical;
+  min-height:9rem;
+}
+.field textarea::placeholder{ color:var(--cloud-faint); }
+
+.song-list{
+  display:flex;
+  flex-direction:column;
+  gap:.35rem;
+  max-height:13rem;
+  overflow-y:auto;
+  padding:.15rem;
+  /* A slim scrollbar so the list doesn't visually shout next to the fields. */
+  scrollbar-width:thin;
+  scrollbar-color:rgba(248,249,253,.28) transparent;
+}
+.song-list::-webkit-scrollbar{ width:.4rem; }
+.song-list::-webkit-scrollbar-thumb{
+  background:rgba(248,249,253,.28);
+  border-radius:.2rem;
+}
+
+.song-item{
+  display:flex;
+  gap:.4rem;
+  align-items:stretch;
+}
+.song-item .song-load{
+  flex:1;
+  text-align:left;
+  padding:.5rem .65rem;
+  border-radius:.5rem;
+  border:1px solid transparent;
+  background:rgba(248,249,253,.06);
+  color:var(--cloud);
+  font-size:.83rem;
+  cursor:pointer;
+  transition:background .2s ease, border-color .2s ease;
+}
+.song-item .song-load:hover{ background:rgba(248,249,253,.14); }
+.song-item.is-active .song-load{
+  border-color:var(--sunrise-amber);
+  background:rgba(255,194,75,.14);
+}
+.song-item .song-delete{
+  flex:none;
+  width:2rem;
+  border-radius:.5rem;
+  border:1px solid var(--glass-border);
+  background:transparent;
+  color:var(--cloud-faint);
+  font-size:1rem;
+  line-height:1;
+  cursor:pointer;
+  transition:background .2s ease, color .2s ease;
+}
+.song-item .song-delete:hover{
+  background:rgba(242,112,27,.22);
+  color:var(--cloud);
+}
+
+.song-empty{
+  font-size:.78rem;
+  color:var(--cloud-faint);
+  padding:.4rem .2rem;
+  line-height:1.5;
+}
+
+.hint{
+  font-size:.72rem;
+  color:var(--cloud-faint);
+  line-height:1.5;
+}
+
+hr.sep{
+  border:none;
+  border-top:1px solid var(--glass-border);
+  margin:.2rem 0;
+}
+
+@media (prefers-reduced-motion: reduce){
+  #settings-panel{ transition:none; }
+  .chrome{ transition:none; }
+}

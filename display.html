@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Exploits Worship Centre — Service Display</title>
+
+<!-- Google Fonts: Space Grotesk for numerals/UI, Fraunces for warm editorial labels -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,500;0,600;1,500;1,600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="display.css">
+<link rel="stylesheet" href="display-extra.css">
+
+<style>
+/* The display is projection-only: no admin chrome, no settings, and nothing
+   to click. Any pointer that lands on it is suppressed so a stray touch on
+   the projector laptop can't disturb the service. */
+body{ cursor:none; }
+#display{ pointer-events:none; }
+</style>
+</head>
+<body>
+
+<div id="stage">
+
+  <!-- Background: photo or generated sunrise gradient -->
+  <div id="bg-layer"></div>
+  <canvas id="particle-canvas"></canvas>
+  <div id="vignette"></div>
+
+  <!-- Church identity -->
+  <header class="badge">
+    <span class="badge__mark"><img src="crest.png" alt="Exploits Worship Centre crest"></span>
+    <span class="badge__name">Exploits Worship Centre<small>Live Service Display</small></span>
+  </header>
+
+  <!-- Main display: timer, analog clock, scripture or lyrics -->
+  <main id="display">
+
+    <section id="timer-view" class="panel">
+      <div class="timer-row" id="timer-row"><!-- digit groups injected by JS --></div>
+      <p class="timer-caption" id="timer-caption">to Sunday Service</p>
+      <p class="timer-subcaption" id="timer-subcaption"></p>
+    </section>
+
+    <section id="clock-view" class="panel">
+      <div class="clock-frame"><canvas id="clock-canvas"></canvas></div>
+      <p class="clock-readout" id="clock-readout">--:--:--</p>
+      <p class="clock-date" id="clock-date"></p>
+    </section>
+
+    <section id="scripture-view" class="panel scripture-panel">
+      <p class="scripture-text" id="scripture-text">Loading Scripture…</p>
+      <p class="scripture-reference" id="scripture-reference"></p>
+    </section>
+
+    <section id="lyrics-view" class="panel lyrics-panel">
+      <p class="lyrics-title" id="lyrics-title">Lyrics</p>
+      <div class="lyrics-scrollport" id="lyrics-scrollport">
+        <div class="lyrics-track" id="lyrics-track"><!-- lines injected by JS --></div>
+      </div>
+      <p class="lyrics-empty" id="lyrics-empty" hidden></p>
+    </section>
+
+  </main>
+
+  <p class="micro-time" id="micro-time"></p>
+
+</div>
+
+<!-- Three.js (pinned UMD build) — powers the ambient background particles
+     and the analog clock. Loaded from the approved cdnjs host. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+<script src="display-common.js"></script>
+<script src="display.js"></script>
+</body>
+</html>

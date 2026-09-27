@@ -1,0 +1,82 @@
+/* ============================================================================
+   LANDING — the small launcher shown at the old address (index.html)
+
+   Nothing sacred here: it exists so /index.html still means "the display
+   system", while the actual projection lives at display.html and the controls
+   at console.html.
+   ========================================================================== */
+
+.landing{
+  max-width:min(78vw, 44rem);
+  text-align:center;
+  gap:1.1rem;
+}
+
+.landing h1{
+  margin:0;
+  font-family:var(--font-editorial);
+  font-style:italic;
+  font-weight:600;
+  font-size:clamp(1.6rem, 3.4vw, 2.6rem);
+  color:var(--cloud);
+}
+
+.landing__intro{
+  margin:0;
+  font-size:clamp(.85rem, 1.3vw, 1.1rem);
+  line-height:1.6;
+  color:var(--cloud-dim);
+}
+
+.landing__steps{
+  list-style:none;
+  margin:.4rem 0 0;
+  padding:0;
+  display:flex;
+  flex-direction:column;
+  gap:.8rem;
+  text-align:left;
+}
+
+.landing__steps li{
+  display:flex;
+  flex-direction:column;
+  gap:.3rem;
+}
+
+.landing__steps span{
+  font-size:.78rem;
+  color:var(--cloud-faint);
+  line-height:1.5;
+}
+
+.landing__link{
+  align-self:flex-start;
+  padding:.6rem 1.1rem;
+  border-radius:.6rem;
+  border:1px solid var(--glass-border);
+  background:rgba(248,249,253,.08);
+  color:var(--cloud);
+  font-size:.9rem;
+  text-decoration:none;
+  transition:background .2s ease;
+}
+.landing__link:hover{ background:rgba(248,249,253,.16); }
+.landing__link.primary{
+  background:linear-gradient(135deg, var(--sunrise-orange), var(--sunrise-amber));
+  color:var(--navy-950);
+  font-weight:600;
+  border:none;
+}
+.landing__link.primary:hover{ filter:brightness(1.06); }
+
+.landing__note{
+  margin:.2rem 0 0;
+  font-size:.75rem;
+  line-height:1.6;
+  color:var(--cloud-faint);
+}
+
+@media (prefers-reduced-motion: reduce){
+  .landing__link{ transition:none; }
+}

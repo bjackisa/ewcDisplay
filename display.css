@@ -1,0 +1,475 @@
+
+/* ==========================================================================
+   0. DESIGN TOKENS
+   A small, named palette pulled from the Exploits Worship Centre mark:
+   the sunrise orange/amber of the sun, the deep navy of the waves, and
+   cloud-white for the cross. Everything else is built from these six.
+   ========================================================================== */
+:root{
+  color-scheme: dark; /* native inputs (date pickers, file buttons) render dark */
+
+  --navy-950:#070b1a;
+  --navy-900:#0b1533;
+  --navy-800:#141c40;
+  --indigo-700:#232a5c;
+  --sunrise-orange:#f2701b;
+  --sunrise-amber:#ffc24b;
+  --cloud:#f8f9fd;
+
+  --cloud-dim:rgba(248,249,253,.70);
+  --cloud-faint:rgba(248,249,253,.45);
+  /* Deliberately a dark "smoked glass" tint rather than a light frost: the
+     panel sits over a user-chosen photo of unknown brightness, so it needs
+     to darken whatever is behind it to guarantee the white digits stay
+     legible, then rely on the border/highlight for the glass feel. */
+  --glass-fill:rgba(7,11,26,.42);
+  --glass-fill-strong:rgba(7,11,26,.58);
+  --glass-border:rgba(248,249,253,.22);
+  --glass-shadow:rgba(4,7,18,.55);
+  --focus-ring:#ffc24b;
+
+  --font-display:'Space Grotesk', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-editorial:'Fraunces', Georgia, 'Iowan Old Style', serif;
+
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+html{
+  scroll-padding-top: env(safe-area-inset-top, 0px);
+  height:100%;
+}
+
+*{ box-sizing:border-box; }
+
+/* ==========================================================================
+   1. BASE / RESET
+   This is a full-bleed display graphic, not a document — no scrolling,
+   no text selection halo, no tap highlight. It should read as a screen,
+   not a webpage.
+   ========================================================================== */
+body{
+  margin:0;
+  height:100%;
+  min-height:100vh;
+  background:var(--navy-950);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  overflow:hidden;
+  -webkit-tap-highlight-color:transparent;
+  font-family:var(--font-display);
+}
+
+button, input{ font-family:inherit; }
+
+::selection{ background:var(--sunrise-amber); color:var(--navy-950); }
+
+:focus-visible{ outline:2px solid var(--focus-ring); outline-offset:3px; }
+
+/* ==========================================================================
+   2. STAGE — locked to a true 16:9 frame
+   min(100vw, 177.78vh) × min(100vh, 56.25vw) guarantees the canvas is
+   always exactly 16:9, letterboxed on the axis that doesn't fit, so the
+   graphic is identical whether it's projected, cast, or run in an OBS
+   Browser Source at any resolution up to 8K.
+   ========================================================================== */
+#stage{
+  position:relative;
+  width:min(100vw, 177.78vh);
+  height:min(100vh, 56.25vw);
+  overflow:hidden;
+  background:var(--navy-950);
+  box-shadow:0 0 0 1px rgba(0,0,0,.4);
+}
+
+/* ==========================================================================
+   3. BACKGROUND LAYERS
+   Order (back to front): photo/gradient → ambient particle canvas →
+   vignette. The vignette keeps text legible over any photo the user
+   supplies, without needing to blur or dim the photo itself.
+   ========================================================================== */
+#bg-layer{
+  position:absolute; inset:0;
+  background:
+    radial-gradient(58% 46% at 50% 6%, rgba(255,194,75,.55) 0%, rgba(242,112,27,.32) 38%, transparent 70%),
+    linear-gradient(180deg, #0b1533 0%, #141c40 42%, #1b2456 68%, #0b1533 100%);
+  background-size:cover;
+  background-position:center;
+  transition:background-image .6s ease;
+}
+
+#particle-canvas{
+  position:absolute; inset:0;
+  width:100%; height:100%;
+  display:block;
+  mix-blend-mode:screen;
+  opacity:.65;
+  transition:opacity .6s ease;
+}
+
+#vignette{
+  position:absolute; inset:0;
+  background:
+    linear-gradient(180deg, rgba(4,7,18,.50) 0%, rgba(4,7,18,.05) 28%, rgba(4,7,18,.10) 62%, rgba(4,7,18,.62) 100%),
+    radial-gradient(120% 90% at 50% 50%, transparent 55%, rgba(4,7,18,.45) 100%);
+  pointer-events:none;
+}
+
+/* ==========================================================================
+   4. CORNER BADGE — church mark + name (always visible; this is identity,
+   not a control, so it never auto-hides).
+   ========================================================================== */
+.badge{
+  position:absolute;
+  top:clamp(1.1rem, 2.6vh, 2.4rem);
+  left:clamp(1.2rem, 2.8vw, 3rem);
+  display:flex;
+  align-items:center;
+  gap:clamp(.6rem, 1.1vw, 1.1rem);
+  z-index:5;
+}
+
+.badge__mark{
+  width:clamp(2.4rem, 4vw, 4.4rem);
+  height:clamp(2.4rem, 4vw, 4.4rem);
+  border-radius:50%;
+  background:var(--glass-fill-strong);
+  border:1px solid var(--glass-border);
+  backdrop-filter:blur(18px) saturate(160%);
+  -webkit-backdrop-filter:blur(18px) saturate(160%);
+  box-shadow:0 10px 28px -10px var(--glass-shadow), inset 0 1px 0 rgba(255,255,255,.18);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+
+.badge__mark img{
+  /* Sized in px (derived from the circle's own clamp()'d size via em) rather
+     than a percentage, since percentage padding/sizing on a flex child
+     resolves against the flex row's full width (circle + name), not the
+     circle alone — that bug once collapsed this image to 0×0. */
+  width:70%;
+  height:70%;
+  object-fit:contain;
+  filter:drop-shadow(0 2px 6px rgba(0,0,0,.35));
+}
+
+.badge__name{
+  font-family:var(--font-editorial);
+  font-style:italic;
+  font-weight:500;
+  font-size:clamp(.95rem, 1.5vw, 1.5rem);
+  color:var(--cloud);
+  letter-spacing:.01em;
+  text-shadow:0 2px 14px rgba(0,0,0,.45);
+  line-height:1.15;
+}
+
+.badge__name small{
+  display:block;
+  font-family:var(--font-display);
+  font-style:normal;
+  font-weight:500;
+  font-size:.55em;
+  color:var(--cloud-faint);
+  letter-spacing:.08em;
+  margin-top:.15em;
+}
+
+/* ==========================================================================
+   5. MAIN DISPLAY
+   ========================================================================== */
+#display{
+  position:absolute; inset:0;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  z-index:4;
+}
+
+.panel{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:clamp(.6rem, 1.6vh, 1.4rem);
+  padding:clamp(2rem, 4.4vh, 4rem) clamp(2.6rem, 6vw, 5.5rem);
+  border-radius:clamp(1.6rem, 2.4vw, 2.6rem);
+  background:linear-gradient(155deg, var(--glass-fill-strong), var(--glass-fill));
+  border:1px solid var(--glass-border);
+  backdrop-filter:blur(30px) saturate(170%);
+  -webkit-backdrop-filter:blur(30px) saturate(170%);
+  box-shadow:0 40px 90px -30px var(--glass-shadow), inset 0 1px 0 rgba(255,255,255,.22);
+}
+
+/* -- Timer view ----------------------------------------------------------- */
+.timer-row{
+  display:flex;
+  align-items:baseline;
+  justify-content:center;
+  gap:clamp(.3rem, .9vw, .9rem);
+}
+
+.digit-group{
+  display:flex;
+  font-family:var(--font-display);
+  font-weight:700;
+  font-variant-numeric:tabular-nums;
+  font-feature-settings:'tnum' 1;
+  font-size:clamp(3.4rem, 10vw, 10.5rem);
+  line-height:1;
+  color:var(--cloud);
+  letter-spacing:.01em;
+  text-shadow:0 0 44px rgba(255,194,75,.35), 0 4px 18px rgba(0,0,0,.4);
+  transition:opacity .45s ease, transform .45s ease;
+}
+
+.digit-group[data-leaving="true"]{
+  opacity:0;
+  transform:scale(.85);
+}
+
+.colon{
+  font-family:var(--font-display);
+  font-weight:700;
+  font-size:clamp(3.4rem, 10vw, 10.5rem);
+  line-height:1;
+  color:var(--sunrise-amber);
+  transform:translateY(-.06em);
+  animation:blink 1s steps(1,end) infinite;
+}
+
+@keyframes blink{
+  0%,49%{ opacity:1; }
+  50%,100%{ opacity:.25; }
+}
+
+.timer-caption{
+  font-family:var(--font-editorial);
+  font-style:italic;
+  font-weight:500;
+  font-size:clamp(1.05rem, 2vw, 1.9rem);
+  color:var(--cloud-dim);
+  text-align:center;
+  text-shadow:0 2px 12px rgba(0,0,0,.35);
+}
+
+.timer-subcaption{
+  font-family:var(--font-display);
+  font-weight:500;
+  font-size:clamp(.7rem, 1vw, .9rem);
+  letter-spacing:.06em;
+  color:var(--cloud-faint);
+}
+
+.panel.is-complete .digit-group,
+.panel.is-complete .colon{
+  color:var(--sunrise-amber);
+  animation:glowPulse 1.8s ease-in-out infinite;
+}
+
+@keyframes glowPulse{
+  0%,100%{ text-shadow:0 0 30px rgba(255,194,75,.4); }
+  50%{ text-shadow:0 0 66px rgba(255,194,75,.85); }
+}
+
+/* -- Clock view ------------------------------------------------------------ */
+#clock-view{ display:none; }
+
+.clock-frame{
+  width:min(30vw, 46vh);
+  height:min(30vw, 46vh);
+  position:relative;
+}
+
+#clock-canvas{
+  width:100%;
+  height:100%;
+  display:block;
+}
+
+.clock-readout{
+  font-family:var(--font-display);
+  font-weight:600;
+  font-variant-numeric:tabular-nums;
+  font-size:clamp(1.4rem, 2.6vw, 2.6rem);
+  color:var(--cloud);
+  letter-spacing:.02em;
+  text-shadow:0 2px 16px rgba(0,0,0,.4);
+}
+
+.clock-date{
+  font-family:var(--font-editorial);
+  font-style:italic;
+  font-size:clamp(.95rem, 1.5vw, 1.4rem);
+  color:var(--cloud-dim);
+}
+
+/* -- Scripture view --------------------------------------------------------
+   Same glass panel as the timer/clock; the verse itself carries the weight
+   here rather than a big numeral, so it gets the editorial serif treatment
+   and a generous, readable measure instead of running edge-to-edge. */
+#scripture-view{ display:none; }
+
+.scripture-panel{
+  max-width:min(78vw, 54rem);
+}
+
+.scripture-text{
+  font-family:var(--font-editorial);
+  font-style:italic;
+  font-weight:500;
+  font-size:clamp(1.3rem, 2.5vw, 2.5rem);
+  line-height:1.4;
+  color:var(--cloud);
+  text-align:center;
+  text-shadow:0 2px 14px rgba(0,0,0,.35);
+  transition:opacity .35s ease;
+}
+.scripture-text::before{ content:"\201C"; }
+.scripture-text::after{ content:"\201D"; }
+
+.scripture-reference{
+  font-family:var(--font-display);
+  font-weight:600;
+  font-size:clamp(1rem, 1.6vw, 1.6rem);
+  color:var(--sunrise-amber);
+  letter-spacing:.02em;
+  text-shadow:0 2px 12px rgba(0,0,0,.35);
+  transition:opacity .35s ease;
+}
+
+/* -- Lyrics view ------------------------------------------------------------
+   The focused line is the one being sung; the lines either side sit faint and
+   slightly shrunk, so the operator's eye is on the current line while the
+   congregation can still see what's coming.
+
+   How the glide stays smooth rather than wobbly:
+
+     1. The active line is emphasised with transform:scale, NOT font-size.
+        A transform never changes layout, so line boxes keep their height on
+        every step and the track's translate maths stays valid throughout.
+     2. Rows may be more than one line tall — a long worship line wraps rather
+        than being clipped — so the track is positioned from each row's own
+        measured offsetTop/offsetHeight instead of an assumed uniform stride.
+        That is why .lyric-line sets min-height, not height.
+
+   The scrollport is masked top and bottom, which is what makes the outgoing
+   and incoming lines trail off rather than being clipped at a hard edge. */
+#lyrics-view{ display:none; }
+
+.lyrics-panel{
+  /* A definite width, not just a max-width: .panel is a shrink-to-fit flex
+     item, so the scrollport's own width:100% has nothing to resolve against
+     and collapses — which would wrap every lyric into a sliver. */
+  width:min(82vw, 60rem);
+  max-width:100%;
+  /* Let the mask breathe over the panel's own padding. */
+  padding-inline:clamp(1.4rem, 4vw, 4rem);
+}
+
+.lyrics-title{
+  font-family:var(--font-display);
+  font-weight:600;
+  font-size:clamp(.85rem, 1.3vw, 1.2rem);
+  letter-spacing:.14em;
+  text-transform:uppercase;
+  color:var(--sunrise-amber);
+  text-align:center;
+  text-shadow:0 2px 12px rgba(0,0,0,.35);
+  transition:opacity .35s ease;
+}
+
+.lyrics-scrollport{
+  position:relative;
+  width:100%;
+  height:min(52vh, 26rem);
+  overflow:hidden;
+  /* Fades the neighbouring lines out towards the top and bottom edges. */
+  -webkit-mask-image:linear-gradient(to bottom,
+    transparent 0%, #000 22%, #000 78%, transparent 100%);
+  mask-image:linear-gradient(to bottom,
+    transparent 0%, #000 22%, #000 78%, transparent 100%);
+}
+
+.lyrics-track{
+  position:absolute;
+  top:0; left:0;
+  width:100%;
+  will-change:transform;
+  transition:transform .55s cubic-bezier(.22,.9,.3,1);
+}
+
+.lyric-line{
+  /* min-height, not height: a long line is allowed to wrap to a second row.
+     margin:0 matters too — each row is a <p>, and the default 1em vertical
+     margin would inflate the stride and collapse between siblings. */
+  min-height:clamp(2.6rem, 6.6vh, 4.8rem);
+  margin:0;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  text-align:center;
+  overflow-wrap:break-word;
+  font-family:var(--font-editorial);
+  font-weight:500;
+  font-size:clamp(1.05rem, 1.9vw, 2rem);
+  line-height:1.25;
+  color:var(--cloud);
+  opacity:.3;
+  transform:scale(.94);
+  transition:opacity .45s ease, transform .45s ease, color .45s ease;
+}
+
+.lyric-line.is-active{
+  opacity:1;
+  transform:scale(1.09);
+  font-weight:600;
+  text-shadow:0 2px 18px rgba(0,0,0,.45), 0 0 40px rgba(255,194,75,.22);
+}
+
+/* Lines already sung stay a touch dimmer than the ones still to come, which
+   quietly signals "we're here" as the song progresses. */
+.lyric-line.is-past{ opacity:.18; }
+
+.lyrics-empty{
+  font-family:var(--font-display);
+  font-weight:500;
+  font-size:clamp(.85rem, 1.2vw, 1.1rem);
+  color:var(--cloud-dim);
+  text-align:center;
+  max-width:34rem;
+  line-height:1.6;
+}
+
+/* ==========================================================================
+   6. AMBIENT MICRO CLOCK (bottom-left) — small, quiet, always-on
+   ========================================================================== */
+.micro-time{
+  position:absolute;
+  left:clamp(1.2rem, 2.8vw, 3rem);
+  bottom:clamp(1rem, 2.4vh, 2.2rem);
+  z-index:5;
+  font-family:var(--font-display);
+  font-weight:500;
+  font-variant-numeric:tabular-nums;
+  font-size:clamp(.75rem, 1vw, .95rem);
+  color:var(--cloud-faint);
+  letter-spacing:.03em;
+  text-shadow:0 2px 10px rgba(0,0,0,.4);
+}
+
+/* ==========================================================================
+   9. REDUCED MOTION — honour it: stop the colon blink, glow pulse and
+   ambient particle drift, keep only the functional clock hands moving.
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce){
+  .colon{ animation:none; opacity:1; }
+  .panel.is-complete .digit-group,
+  .panel.is-complete .colon{ animation:none; }
+  .digit-group{ transition:none; }
+  .scripture-text, .scripture-reference{ transition:none; }
+  .lyrics-track{ transition:none; }
+  .lyric-line{ transition:none; }
+  .lyrics-title{ transition:none; }
+}

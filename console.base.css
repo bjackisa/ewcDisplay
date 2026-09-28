@@ -117,23 +117,24 @@ body.ui-visible .chrome{
   background:var(--navy-900);
   color:var(--cloud);
 }
-/* Two side-by-side inputs, e.g. chapter + verse. */
-.field-row{ display:flex; gap:.6rem; }
-.field-row .field{ flex:1; }
+/* Two or more inputs side by side, e.g. chapter + verse. The row wraps when
+   the rail is too narrow, and the fields may shrink below their intrinsic
+   width (a datetime-local input is stubbornly wide) instead of spilling. */
+.field-row{ display:flex; flex-wrap:wrap; gap:.6rem; }
+.field-row .field{ flex:1 1 9rem; min-width:0; }
 
-/* The panel-content picker carries seven labels, too many for one row of the
-   rail. Let it wrap onto as many lines as it needs so every mode stays
-   reachable instead of being clipped by the container. */
+.field input,
+.field select,
+.field textarea{ min-width:0; max-width:100%; }
+
 .segmented{
   display:flex;
-  flex-wrap:wrap;
   border:1px solid var(--glass-border);
   border-radius:.7rem;
   overflow:hidden;
 }
 .segmented button{
-  flex:1 1 6.5rem;
-  min-width:6.5rem;
+  flex:1;
   padding:.6rem .5rem;
   background:transparent;
   border:none;
@@ -173,6 +174,19 @@ body.ui-visible .chrome{
 
 /* -- Mode fields: only the chosen panel's controls are shown --------------- */
 #mode-fields > div[hidden]{ display:none; }
+
+/* Two side-by-side columns of controls, e.g. the song list next to the
+   add-a-song form. Collapses back to one column when the rail is narrow. */
+.mode-split{
+  display:flex;
+  flex-wrap:wrap;
+  gap:1.2rem;
+  align-items:flex-start;
+}
+.mode-split__col{
+  flex:1 1 12rem;
+  min-width:0;
+}
 
 /* -- No Panel switch ------------------------------------------------------- */
 .switch{

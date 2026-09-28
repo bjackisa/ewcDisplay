@@ -109,34 +109,49 @@ body.console{
 }
 
 /* The controls rail reuses the old #settings-panel look, but it is no longer
-   an overlay that slides in — it sits permanently open beside the preview. */
+   an overlay that slides in — it sits permanently open beside the preview.
+   It takes every pixel the preview does not: the preview is capped to a
+   normal video size below, so the rail is where the room went. */
 #settings-panel{
   position:static;
   transform:none;
   top:auto; right:auto;
-  width:min(26rem, 40vw);
-  flex:none;
+  flex:1 1 auto;
+  min-width:0;
   height:100%;
   border-left:none;
   border-right:1px solid var(--glass-border);
 }
 
-/* The mode picker stays pinned to the top of the rail: switching modes is the
-   most common action, so it must never be scrolled out of reach. */
-#mode-select-field{
-  position:sticky;
-  top:0;
-  z-index:2;
-  padding-bottom:.8rem;
-  margin:-.4rem 0 -.4rem;
-  background:linear-gradient(180deg, rgba(7,11,26,.98) 82%, rgba(7,11,26,0));
+/* --------------------------------------------------------------------------
+   Panel picker — a full-width strip along the bottom edge
+   -------------------------------------------------------------------------- */
+.console__modes{
+  flex:none;
+  padding:.7rem 1.1rem;
+  background:linear-gradient(0deg, rgba(11,21,51,.98), rgba(7,11,26,.98));
+  border-top:1px solid var(--glass-border);
+  z-index:3;
+}
+
+/* One row, each mode an equal share of the width. */
+.console__modes .segmented{ flex-wrap:nowrap; }
+.console__modes .segmented button{
+  flex:1 1 0;
+  min-width:0;
+  white-space:nowrap;
+  /* Shrink the labels rather than clip them: every mode name has to stay
+     readable, and seven of them share one line however narrow the window is. */
+  font-size:clamp(.66rem, 1.02vw, .85rem);
+  padding:.6rem .4rem;
 }
 
 /* --------------------------------------------------------------------------
    Preview
    -------------------------------------------------------------------------- */
 .console__preview{
-  flex:1;
+  flex:0 1 auto;
+  width:min(100%, 902px);
   min-width:0;
   display:flex;
   flex-direction:column;
@@ -179,12 +194,17 @@ body.console{
   padding:.35rem 0;
 }
 
-/* The frame is a 16:9 letterbox, matching the projection exactly. The iframe
-   inside is a true 1600×900 stage scaled to fit (see display-extra.css), so
-   the preview never reflows the layout the congregation will see. */
+/* The frame is a 16:9 letterbox, matching the projection exactly, but capped
+   to the width of an ordinary embedded video so it no longer dominates the
+   window. The iframe inside is a true 1600×900 stage scaled to fit (see
+   display-extra.css), so the preview never reflows the layout the
+   congregation will see. */
 .preview-frame{
-  flex:1;
-  min-height:0;
+  flex:none;
+  aspect-ratio:16/9;
+  width:min(100%, 854px);
+  max-height:100%;
+  margin:auto;
   position:relative;
   overflow:hidden;
   border-radius:.9rem;

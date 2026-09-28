@@ -46,8 +46,14 @@ The console has a **mode picker** (`#mode-toggle-group`) naming what goes on
 the glass panel: timer, clock, scripture, lyrics, text, media, camera. Only the
 chosen mode's own fields are shown: `#mode-fields` holds one `#<mode>-fields`
 block per mode and `setMode()` hides all but the chosen one, so the operator
-sees one mode's controls rather than every control at once. The picker itself
-is `position:sticky` at the top of the rail.
+sees one mode's controls rather than every control at once.
+
+The picker is **not in the rail**. It is a full-width `.console__modes` bar
+along the bottom edge of the window, a sibling of the rail/preview row. Seven
+labels cannot share one line inside the narrow rail, and pinning them to the
+top of the rail (the old `position:sticky`) ate height the controls needed.
+As a bottom bar they sit on one line, always visible, whatever the rail is
+scrolled to.
 
 | Mode | On screen |
 | --- | --- |
@@ -77,7 +83,7 @@ disappears for "No Panel".
 | `display.css` | Design tokens, base styles, and stage/panel/lyrics views — used by **both** pages. |
 | `display-extra.css` | Display-only tweaks, including preview scaling. |
 | `console.base.css` | The form controls carried over from the old settings drawer. |
-| `console.css` | Control-room layout: top bar, controls rail, preview. |
+| `console.css` | Control-room layout: top bar, controls rail, preview, the bottom panel picker. |
 | `landing.css` | `index.html` launcher. |
 | `serve.py` | Local http server. |
 | `bible-data.js` | KJV text, generated from `en_kjv.json` by `build_bible_data.py`. Do not hand-edit. |
@@ -133,6 +139,18 @@ disappears for "No Panel".
 - **Media mode is selectable with nothing chosen.** It shows the empty panel
   rather than silently falling back to the timer, which would hide the media
   picker the operator just asked for.
+- **The console preview is capped, the rail is not.** `.console__preview` is
+  `flex:0 1 auto` with a definite width so `.preview-frame` can size itself to
+  16:9 and stay at a normal video size; `#settings-panel` is `flex:1 1 auto`
+  and takes the rest. Making the preview `flex:1` again hands it the whole row
+  and squeezes the controls back into a scrollbox.
+- **`.field-row` must wrap and its inputs must be shrinkable.** A
+  `datetime-local` input has an intrinsic width it will not go below, so
+  without `flex-wrap` plus `min-width:0` on the fields it spills out of the
+  rail on a narrower window.
+- **The bottom picker scales its labels instead of clipping them.** Seven
+  names share one line in `.console__modes`; `white-space:nowrap` alone
+  truncates them at ~900px, so the font size is clamped to the viewport width.
 
 ## Testing
 

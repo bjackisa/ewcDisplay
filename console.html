@@ -44,34 +44,20 @@
     <!-- ------------------------------------------------------------------ -->
     <aside id="settings-panel">
 
-      <div class="field" id="mode-select-field">
-        <label>Panel content</label>
-        <div class="segmented" id="mode-toggle-group" role="group">
-          <button type="button" data-mode="timer" class="active">Countdown timer</button>
-          <button type="button" data-mode="clock">Analog clock</button>
-          <button type="button" data-mode="scripture">Scripture</button>
-          <button type="button" data-mode="lyrics">Lyrics</button>
-          <button type="button" data-mode="text">Text</button>
-          <button type="button" data-mode="media">Media</button>
-          <button type="button" data-mode="camera">Camera</button>
-        </div>
-        <p class="hint">Pick what you want on the panel — only that item’s controls appear below. Nothing reaches the screen until you press Launch.</p>
-      </div>
-
-      <hr class="sep">
-
       <!-- Only the chosen panel's own controls are shown. Everything here is
            preview-only until Launch is pressed. -->
       <div id="mode-fields">
 
         <div id="timer-fields">
-          <div class="field">
-            <label for="event-name-input">Event name</label>
-            <input type="text" id="event-name-input" maxlength="60" placeholder="Sunday Service">
-          </div>
-          <div class="field" style="margin-top:1rem;">
-            <label for="target-datetime-input">Date &amp; time</label>
-            <input type="datetime-local" id="target-datetime-input">
+          <div class="field-row">
+            <div class="field">
+              <label for="event-name-input">Event name</label>
+              <input type="text" id="event-name-input" maxlength="60" placeholder="Sunday Service">
+            </div>
+            <div class="field">
+              <label for="target-datetime-input">Date &amp; time</label>
+              <input type="datetime-local" id="target-datetime-input">
+            </div>
           </div>
           <button class="btn" id="next-sunday-btn" style="margin-top:.8rem;">Set to next Sunday, 9:00 AM</button>
           <p class="hint">The countdown ticks live once it is on the screen.</p>
@@ -82,13 +68,13 @@
         </div>
 
         <div id="scripture-fields" hidden>
-          <div class="field">
-            <label for="scripture-book-select">Book</label>
-            <select id="scripture-book-select" disabled>
-              <option>Loading Bible data…</option>
-            </select>
-          </div>
-          <div class="field-row" style="margin-top:1rem;">
+          <div class="field-row">
+            <div class="field">
+              <label for="scripture-book-select">Book</label>
+              <select id="scripture-book-select" disabled>
+                <option>Loading Bible data…</option>
+              </select>
+            </div>
             <div class="field">
               <label for="scripture-chapter-input">Chapter</label>
               <input type="number" id="scripture-chapter-input" min="1" step="1" inputmode="numeric">
@@ -98,36 +84,42 @@
               <input type="number" id="scripture-verse-input" min="1" step="1" inputmode="numeric">
             </div>
           </div>
-          <button class="btn" id="scripture-go-btn" style="margin-top:.8rem;">Review verse</button>
-          <button class="btn" id="choose-scripture-file-btn" style="margin-top:.5rem;">Choose en_kjv.json…</button>
+          <div class="file-row" style="margin-top:.8rem;">
+            <button class="btn primary" id="scripture-go-btn">Review verse</button>
+            <button class="btn" id="choose-scripture-file-btn">Choose en_kjv.json…</button>
+          </div>
           <input type="file" id="scripture-file-input" accept="application/json,.json">
           <p class="hint" id="scripture-status" style="margin-top:.6rem;">Loading Bible…</p>
           <p class="hint">Review a verse here, then Launch it. The ← and → keys (or the ‹ › buttons above the preview) step through verses in the preview.</p>
         </div>
 
         <div id="lyrics-fields" hidden>
-          <div class="field">
-            <label for="song-search-input">Find a song</label>
-            <input type="text" id="song-search-input" placeholder="Search by title…" autocomplete="off">
-          </div>
+          <div class="mode-split">
+            <div class="mode-split__col">
+              <div class="field">
+                <label for="song-search-input">Find a song</label>
+                <input type="text" id="song-search-input" placeholder="Search by title…" autocomplete="off">
+              </div>
 
-          <div class="field" style="margin-top:1rem;">
-            <label>Songs</label>
-            <div class="song-list" id="song-list"><!-- built by JS --></div>
-          </div>
+              <div class="field" style="margin-top:1rem;">
+                <label>Songs</label>
+                <div class="song-list" id="song-list"><!-- built by JS --></div>
+              </div>
+            </div>
 
-          <hr class="sep" style="margin:.4rem 0;">
-
-          <div class="field">
-            <label for="song-title-input">Add a song</label>
-            <input type="text" id="song-title-input" maxlength="80" placeholder="Song title">
+            <div class="mode-split__col">
+              <div class="field">
+                <label for="song-title-input">Add a song</label>
+                <input type="text" id="song-title-input" maxlength="80" placeholder="Song title">
+              </div>
+              <div class="field" style="margin-top:.7rem;">
+                <label for="song-lyrics-input">Lyrics</label>
+                <textarea id="song-lyrics-input" placeholder="One line per row — each row shows on its own line."></textarea>
+              </div>
+              <button class="btn primary" id="song-save-btn" style="margin-top:.8rem;">Save song</button>
+              <p class="hint" id="song-status" style="margin-top:.6rem;"></p>
+            </div>
           </div>
-          <div class="field" style="margin-top:.7rem;">
-            <label for="song-lyrics-input">Lyrics</label>
-            <textarea id="song-lyrics-input" placeholder="One line per row — each row shows on its own line."></textarea>
-          </div>
-          <button class="btn primary" id="song-save-btn" style="margin-top:.8rem;">Save song</button>
-          <p class="hint" id="song-status" style="margin-top:.6rem;"></p>
           <p class="hint">Songs are saved on this device. The ↑ and ↓ keys (or the ‹ › buttons above the preview) move a line in the preview. Editing a song that is already live updates the screen as you save.</p>
         </div>
 
@@ -218,6 +210,22 @@
     </main>
 
   </div>
+
+  <!-- The panel picker spans the whole window along the bottom edge. It is a
+       sibling of the rail/preview row rather than part of the rail, so it
+       never scrolls away and never steals height from the controls. -->
+  <footer class="console__modes">
+    <div class="segmented" id="mode-toggle-group" role="group">
+      <button type="button" data-mode="timer" class="active">Countdown timer</button>
+      <button type="button" data-mode="clock">Analog clock</button>
+      <button type="button" data-mode="scripture">Scripture</button>
+      <button type="button" data-mode="lyrics">Lyrics</button>
+      <button type="button" data-mode="text">Text</button>
+      <button type="button" data-mode="media">Media</button>
+      <button type="button" data-mode="camera">Camera</button>
+    </div>
+  </footer>
+
 </div>
 
 <script src="display-common.js"></script>

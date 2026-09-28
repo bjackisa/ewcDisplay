@@ -39,13 +39,22 @@ body.is-preview #stage{
 }
 
 /* A long verse is shrunk by display.js rather than being allowed to run off
-   the bottom of the panel, but leave the copy some room to breathe first. */
-.scripture-text{ max-width:min(72vw, 48rem); }
+   the bottom of the panel, but leave the copy a generous measure so a verse
+   that *can* fit at a readable size does. */
+.scripture-text{ max-width:min(82vw, 60rem); }
 
 /* When the focused lyric is tall enough to overflow the scrollport (a long
-   line wrapping to three rows), pull the type in so the current line is never
-   cut in half. display.js toggles the class. */
+   line wrapping to several rows), pull the type in so the current line is
+   never cut in half. display.js toggles the class. It stays well above the
+   old sizes: this is still a back-of-the-room display. */
 .lyrics-scrollport.is-tight .lyric-line{
-  font-size:clamp(.9rem, 1.5vw, 1.5rem);
-  min-height:clamp(2.2rem, 5vh, 3.4rem);
+  font-size:clamp(1.4rem, 2.5vw, 2.4rem);
+  min-height:clamp(2.6rem, 6vh, 4rem);
 }
+
+/* "No Display": the console has cleared the foreground, so the background is
+   the whole show. The badge and micro-clock stay — they are identity, not
+   content — but the glass panel and both foreground layers are hidden. */
+body.no-foreground #display{ display:none; }
+body.no-foreground #fg-layer,
+body.no-foreground #text-layer{ display:none; }

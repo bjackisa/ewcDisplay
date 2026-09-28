@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Backdrop and song persistence across reloads."""
 import pathlib
+import struct
 import subprocess
 import sys
 import time

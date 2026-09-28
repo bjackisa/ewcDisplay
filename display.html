@@ -67,6 +67,19 @@ body{ cursor:none; }
 
   </main>
 
+  <!-- Foreground layer. Two independent things can sit over the background in
+       place of the glass panel: a media item (photo, video, GIF, audio file or
+       the device camera) and a typed quote. The console decides which — if any
+       — is live; with neither, the background shows on its own. -->
+  <div id="fg-layer" hidden>
+    <div class="fg-media" id="fg-media"></div>
+  </div>
+
+  <div id="text-layer" hidden>
+    <p class="fg-quote" id="fg-quote"></p>
+    <p class="fg-attribution" id="fg-attribution" hidden></p>
+  </div>
+
   <p class="micro-time" id="micro-time"></p>
 
 </div>

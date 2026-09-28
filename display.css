@@ -216,7 +216,7 @@ button, input{ font-family:inherit; }
   font-weight:700;
   font-variant-numeric:tabular-nums;
   font-feature-settings:'tnum' 1;
-  font-size:clamp(3.4rem, 10vw, 10.5rem);
+  font-size:clamp(3.6rem, 10.4vw, 11rem);
   line-height:1;
   color:var(--cloud);
   letter-spacing:.01em;
@@ -232,7 +232,7 @@ button, input{ font-family:inherit; }
 .colon{
   font-family:var(--font-display);
   font-weight:700;
-  font-size:clamp(3.4rem, 10vw, 10.5rem);
+  font-size:clamp(3.6rem, 10.4vw, 11rem);
   line-height:1;
   color:var(--sunrise-amber);
   transform:translateY(-.06em);
@@ -248,7 +248,7 @@ button, input{ font-family:inherit; }
   font-family:var(--font-editorial);
   font-style:italic;
   font-weight:500;
-  font-size:clamp(1.05rem, 2vw, 1.9rem);
+  font-size:clamp(1.2rem, 2.3vw, 2.2rem);
   color:var(--cloud-dim);
   text-align:center;
   text-shadow:0 2px 12px rgba(0,0,0,.35);
@@ -257,7 +257,7 @@ button, input{ font-family:inherit; }
 .timer-subcaption{
   font-family:var(--font-display);
   font-weight:500;
-  font-size:clamp(.7rem, 1vw, .9rem);
+  font-size:clamp(.8rem, 1.15vw, 1.05rem);
   letter-spacing:.06em;
   color:var(--cloud-faint);
 }
@@ -277,8 +277,8 @@ button, input{ font-family:inherit; }
 #clock-view{ display:none; }
 
 .clock-frame{
-  width:min(30vw, 46vh);
-  height:min(30vw, 46vh);
+  width:min(32vw, 49vh);
+  height:min(32vw, 49vh);
   position:relative;
 }
 
@@ -292,7 +292,7 @@ button, input{ font-family:inherit; }
   font-family:var(--font-display);
   font-weight:600;
   font-variant-numeric:tabular-nums;
-  font-size:clamp(1.4rem, 2.6vw, 2.6rem);
+  font-size:clamp(1.7rem, 3vw, 3rem);
   color:var(--cloud);
   letter-spacing:.02em;
   text-shadow:0 2px 16px rgba(0,0,0,.4);
@@ -301,7 +301,7 @@ button, input{ font-family:inherit; }
 .clock-date{
   font-family:var(--font-editorial);
   font-style:italic;
-  font-size:clamp(.95rem, 1.5vw, 1.4rem);
+  font-size:clamp(1.05rem, 1.7vw, 1.6rem);
   color:var(--cloud-dim);
 }
 
@@ -319,20 +319,21 @@ button, input{ font-family:inherit; }
   font-family:var(--font-editorial);
   font-style:italic;
   font-weight:500;
-  font-size:clamp(1.3rem, 2.5vw, 2.5rem);
-  line-height:1.4;
+  /* Sized for the back row: the verse is the whole point of the view, so it
+     carries the panel rather than sitting in it. display.js shrinks a long
+     verse to fit; a line wraps rather than shrinking below legibility. */
+  font-size:clamp(2.2rem, 4.4vw, 4.4rem);
+  line-height:1.28;
   color:var(--cloud);
   text-align:center;
   text-shadow:0 2px 14px rgba(0,0,0,.35);
   transition:opacity .35s ease;
 }
-.scripture-text::before{ content:"\201C"; }
-.scripture-text::after{ content:"\201D"; }
 
 .scripture-reference{
   font-family:var(--font-display);
   font-weight:600;
-  font-size:clamp(1rem, 1.6vw, 1.6rem);
+  font-size:clamp(1.1rem, 1.9vw, 1.9rem);
   color:var(--sunrise-amber);
   letter-spacing:.02em;
   text-shadow:0 2px 12px rgba(0,0,0,.35);
@@ -361,8 +362,9 @@ button, input{ font-family:inherit; }
 .lyrics-panel{
   /* A definite width, not just a max-width: .panel is a shrink-to-fit flex
      item, so the scrollport's own width:100% has nothing to resolve against
-     and collapses — which would wrap every lyric into a sliver. */
-  width:min(82vw, 60rem);
+     and collapses — which would wrap every lyric into a sliver. Wider than it
+     once was so the enlarged type still gets a full line before it wraps. */
+  width:min(86vw, 68rem);
   max-width:100%;
   /* Let the mask breathe over the panel's own padding. */
   padding-inline:clamp(1.4rem, 4vw, 4rem);
@@ -371,7 +373,7 @@ button, input{ font-family:inherit; }
 .lyrics-title{
   font-family:var(--font-display);
   font-weight:600;
-  font-size:clamp(.85rem, 1.3vw, 1.2rem);
+  font-size:clamp(1.1rem, 1.9vw, 1.8rem);
   letter-spacing:.14em;
   text-transform:uppercase;
   color:var(--sunrise-amber);
@@ -383,7 +385,7 @@ button, input{ font-family:inherit; }
 .lyrics-scrollport{
   position:relative;
   width:100%;
-  height:min(52vh, 26rem);
+  height:min(58vh, 30rem);
   overflow:hidden;
   /* Fades the neighbouring lines out towards the top and bottom edges. */
   -webkit-mask-image:linear-gradient(to bottom,
@@ -404,7 +406,7 @@ button, input{ font-family:inherit; }
   /* min-height, not height: a long line is allowed to wrap to a second row.
      margin:0 matters too — each row is a <p>, and the default 1em vertical
      margin would inflate the stride and collapse between siblings. */
-  min-height:clamp(2.6rem, 6.6vh, 4.8rem);
+  min-height:clamp(3.6rem, 9.2vh, 6.4rem);
   margin:0;
   display:flex;
   align-items:center;
@@ -413,8 +415,11 @@ button, input{ font-family:inherit; }
   overflow-wrap:break-word;
   font-family:var(--font-editorial);
   font-weight:500;
-  font-size:clamp(1.05rem, 1.9vw, 2rem);
-  line-height:1.25;
+  /* Much larger than the old drawer-sized type: this is the line the
+     congregation reads from the back of the room. A long line wraps to a new
+     row (min-height, not height) rather than being shrunk to fit. */
+  font-size:clamp(2rem, 3.9vw, 3.9rem);
+  line-height:1.2;
   color:var(--cloud);
   opacity:.3;
   transform:scale(.94);
@@ -441,6 +446,121 @@ button, input{ font-family:inherit; }
   max-width:34rem;
   line-height:1.6;
 }
+
+/* ==========================================================================
+   5b. FOREGROUND LAYERS — media and typed text, shown *instead of* the glass
+   panel rather than on top of it, so nothing competes for the same space.
+   The console decides which of the four foreground states is live:
+
+     panel (none)   the glass panel above
+     media          #fg-layer — a photo, video, GIF, audio file or camera feed
+     text           #text-layer — a typed quote
+     no display     both hidden, leaving only the background
+
+   Both layers are 16:9, matching the stage, so a photo or video is not
+   cropped differently from the frame it lands on. */
+#fg-layer, #text-layer{
+  position:absolute; inset:0;
+  z-index:6;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:clamp(1.5rem, 3.5vh, 3.5rem);
+}
+#fg-layer[hidden], #text-layer[hidden]{ display:none; }
+
+.fg-media{
+  width:min(92vw, 88rem);
+  max-height:100%;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  border-radius:clamp(1rem, 1.8vw, 2rem);
+  overflow:hidden;
+  box-shadow:0 40px 90px -30px var(--glass-shadow);
+}
+
+.fg-media img,
+.fg-media video{
+  display:block;
+  max-width:100%;
+  max-height:min(82vh, 46rem);
+  width:auto;
+  height:auto;
+  object-fit:contain;
+  background:#000;
+}
+
+/* An audio file has nothing to show, so it gets a deliberate "now playing"
+   card rather than a bare player sitting on the background. */
+.fg-audio-card{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:clamp(1rem, 2.4vh, 2rem);
+  padding:clamp(2rem, 5vh, 4rem) clamp(2.4rem, 6vw, 5rem);
+  border-radius:clamp(1.6rem, 2.4vw, 2.6rem);
+  background:linear-gradient(155deg, var(--glass-fill-strong), var(--glass-fill));
+  border:1px solid var(--glass-border);
+  backdrop-filter:blur(30px) saturate(170%);
+  -webkit-backdrop-filter:blur(30px) saturate(170%);
+  box-shadow:0 40px 90px -30px var(--glass-shadow), inset 0 1px 0 rgba(255,255,255,.22);
+}
+.fg-audio-card__mark{
+  width:clamp(3rem, 5vw, 5rem);
+  height:clamp(3rem, 5vw, 5rem);
+  border-radius:50%;
+  background:linear-gradient(135deg, var(--sunrise-orange), var(--sunrise-amber));
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:clamp(1.4rem, 2.4vw, 2.4rem);
+  color:var(--navy-950);
+  animation:glowPulse 2.4s ease-in-out infinite;
+}
+.fg-audio-card__name{
+  font-family:var(--font-editorial);
+  font-style:italic;
+  font-weight:500;
+  font-size:clamp(1.1rem, 2vw, 2rem);
+  color:var(--cloud);
+  text-align:center;
+  max-width:40rem;
+  line-height:1.3;
+}
+.fg-media audio{
+  width:min(70vw, 44rem);
+}
+
+.fg-quote{
+  font-family:var(--font-editorial);
+  font-style:italic;
+  font-weight:500;
+  font-size:clamp(2.2rem, 4.6vw, 4.8rem);
+  line-height:1.22;
+  color:var(--cloud);
+  text-align:center;
+  max-width:min(88vw, 76rem);
+  overflow-wrap:break-word;
+  text-shadow:0 3px 22px rgba(0,0,0,.5), 0 0 60px rgba(255,194,75,.12);
+  transition:opacity .35s ease;
+}
+
+.fg-attribution{
+  margin:clamp(1rem, 2.6vh, 2.2rem) 0 0;
+  font-family:var(--font-display);
+  font-weight:600;
+  font-size:clamp(1.1rem, 1.9vw, 1.9rem);
+  letter-spacing:.03em;
+  color:var(--sunrise-amber);
+  text-align:center;
+  text-shadow:0 2px 12px rgba(0,0,0,.45);
+}
+.fg-attribution[hidden]{ display:none; }
+
+/* The camera preview is mirrored so a speaker sees themselves as in a mirror;
+   a plain webcam feed would otherwise feel backwards to them. */
+.fg-media video.is-mirrored{ transform:scaleX(-1); }
 
 /* ==========================================================================
    6. AMBIENT MICRO CLOCK (bottom-left) — small, quiet, always-on

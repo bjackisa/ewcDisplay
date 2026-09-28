@@ -55,6 +55,12 @@
     lyricsTrack: document.getElementById('lyrics-track'),
     lyricsEmpty: document.getElementById('lyrics-empty'),
 
+    fgLayer: document.getElementById('fg-layer'),
+    fgMedia: document.getElementById('fg-media'),
+    textLayer: document.getElementById('text-layer'),
+    fgQuote: document.getElementById('fg-quote'),
+    fgAttribution: document.getElementById('fg-attribution'),
+
     microTime: document.getElementById('micro-time')
   };
 
@@ -68,7 +74,15 @@
     targetISO: EWC.nextSunday9am().toISOString(),
     scripture: { text: 'Loading Scripture…', reference: '' },
     lyrics: { title: 'Lyrics', lines: null, index: 0, emptyMessage: '' },
-    hasCustomBg: false
+    hasCustomBg: false,
+    /* What sits in the foreground, in place of the glass panel:
+         kind 'panel'  the scripture/lyrics/timer/clock panel (the default)
+         kind 'media'  a photo, video, GIF, audio file or the camera feed
+         kind 'text'   a typed quote
+         kind 'none'   nothing — the background shows on its own ("No Display")
+       Media bytes are never carried here; only a small descriptor is. The
+       bytes live in the shared IndexedDB store and are read back on demand. */
+    foreground: { kind: 'panel', media: null, text: { text: '', attribution: '' } }
   };
 
   var renderedUnitKeys = '';
@@ -371,7 +385,11 @@
      just re-applies classes and the glide offset.
      ========================================================================== */
 
-  var renderedSongTitle = null;
+  var renderedLyricsSignature = null;
+
+  function lyricsSignature(lyrics) {
+    return (lyrics.title || '') + '\u0000' + lyrics.lines.join('\n');
+  }
 
   function renderLyrics() {
     var lyrics = state.lyrics;
@@ -382,7 +400,7 @@
       el.lyricsEmpty.hidden = false;
       el.lyricsEmpty.textContent = lyrics.emptyMessage || 'No song selected.';
       el.lyricsTrack.innerHTML = '';
-      renderedSongTitle = null;
+      renderedLyricsSignature = null;
       return;
     }
 
@@ -390,7 +408,11 @@
     el.lyricsEmpty.hidden = true;
     el.lyricsScrollport.hidden = false;
 
-    if (renderedSongTitle !== lyrics.title) {
+    // Rebuild when the title *or any line* changes. Keying on the title alone
+    // would leave an edited song showing its old words, since editing keeps
+    // the title but rewrites the lines.
+    var signature = lyricsSignature(lyrics);
+    if (renderedLyricsSignature !== signature) {
       el.lyricsTrack.innerHTML = '';
       lyrics.lines.forEach(function (line) {
         var p = document.createElement('p');
@@ -398,7 +420,7 @@
         p.textContent = line;
         el.lyricsTrack.appendChild(p);
       });
-      renderedSongTitle = lyrics.title;
+      renderedLyricsSignature = signature;
     }
 
     applyLyricFocus();
@@ -491,6 +513,223 @@
   }
 
   /* ==========================================================================
+     8b. FOREGROUND — media, typed text, or nothing
+     The console picks one of four foreground states and pushes it. Media bytes
+     are never sent over the bus (a video can be tens of MB); the console drops
+     the file into the shared IndexedDB store and sends only a descriptor, and
+     this page reads the bytes back. A camera feed is the exception: it is a
+     live device stream, so this page opens its own getUserMedia and the
+     descriptor just says "camera".
+
+     Everything here is torn down and rebuilt whenever the foreground changes,
+     which is what guarantees a playing video or a running camera is released
+     rather than left running invisibly behind the panel.
+     ========================================================================== */
+
+  var FG_CHOICE_KEY = 'ewc-display-fg-choice-v1';
+  var fgObjectURL = null;
+  var fgCameraStream = null;  // the live getUserMedia stream, if any
+  var fgCameraToken = 0;      // guards against a slow camera resolving late
+  var fgMediaToken = 0;       // guards against a slow media read landing late
+
+  /** Releases whatever the foreground was holding. */
+  function teardownForeground() {
+    fgCameraToken++;
+    fgMediaToken++;
+    if (fgCameraStream) {
+      fgCameraStream.getTracks().forEach(function (track) { track.stop(); });
+      fgCameraStream = null;
+    }
+    if (fgObjectURL) { URL.revokeObjectURL(fgObjectURL); fgObjectURL = null; }
+    el.fgMedia.innerHTML = '';
+    el.fgMedia.classList.remove('is-camera');
+  }
+
+  /** Mounts a <video> or <audio> element for a stored media Blob. */
+  function mountMediaElement(tag, record) {
+    fgObjectURL = URL.createObjectURL(record.blob);
+    var node = document.createElement(tag);
+    node.src = fgObjectURL;
+    node.controls = false;
+    if (tag === 'video') {
+      node.autoplay = true;
+      node.loop = true;
+      node.muted = true; // autoplay policies block unmuted video
+      node.playsInline = true;
+    } else {
+      node.autoplay = true;
+      node.loop = true;
+      node.controls = true; // audio has no visual, so give the operator controls
+    }
+    el.fgMedia.appendChild(node);
+    var played = node.play();
+    if (played && played.catch) played.catch(function () {}); // autoplay may be refused
+  }
+
+  /** Mounts an <img> for a stored picture (GIFs animate on their own). */
+  function mountImage(record) {
+    fgObjectURL = URL.createObjectURL(record.blob);
+    var node = document.createElement('img');
+    node.src = fgObjectURL;
+    node.alt = record.name || 'Displayed media';
+    el.fgMedia.appendChild(node);
+  }
+
+  /** Opens the device camera and shows it as a mirrored live feed. */
+  function mountCamera(descriptor) {
+    var token = ++fgCameraToken;
+    var card = document.createElement('div');
+    card.className = 'fg-audio-card';
+    card.textContent = 'Starting camera…';
+    el.fgMedia.appendChild(card);
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      card.textContent = 'Camera is not available on this device.';
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({ video: true, audio: false }).then(function (stream) {
+      if (token !== fgCameraToken) { // foreground moved on while we waited
+        stream.getTracks().forEach(function (track) { track.stop(); });
+        return;
+      }
+      fgCameraStream = stream;
+      var node = document.createElement('video');
+      node.srcObject = stream;
+      node.autoplay = true;
+      node.muted = true;
+      node.playsInline = true;
+      node.classList.add('is-mirrored');
+      el.fgMedia.innerHTML = '';
+      el.fgMedia.appendChild(node);
+      el.fgMedia.classList.add('is-camera');
+        var played = node.play();
+      if (played && played.catch) played.catch(function () {});
+    }).catch(function (err) {
+      console.warn('Camera unavailable:', err);
+      if (token === fgCameraToken) {
+        el.fgMedia.innerHTML = '';
+        var fail = document.createElement('div');
+        fail.className = 'fg-audio-card';
+        fail.textContent = 'Camera permission was refused on the display device.';
+        el.fgMedia.appendChild(fail);
+      }
+    });
+  }
+
+  /** Shows a media descriptor: 'camera', or a stored file read from the store. */
+  function renderMedia(descriptor) {
+    teardownForeground();
+    if (!descriptor) return;
+    if (descriptor.kind === 'camera') { mountCamera(descriptor); return; }
+
+    var token = fgMediaToken;
+    EWC.getForegroundMedia().then(function (record) {
+      // Bail if the foreground changed while the bytes were being read.
+      if (token !== fgMediaToken || !record || !record.blob) return;
+      if (record.kind === 'image') mountImage(record);
+      else if (record.kind === 'video') mountMediaElement('video', record);
+      else if (record.kind === 'audio') {
+        var card = document.createElement('div');
+        card.className = 'fg-audio-card';
+        var mark = document.createElement('div');
+        mark.className = 'fg-audio-card__mark';
+        mark.textContent = '\u266A';
+        var name = document.createElement('p');
+        name.className = 'fg-audio-card__name';
+        name.textContent = record.name || 'Audio';
+        card.appendChild(mark);
+        card.appendChild(name);
+        el.fgMedia.appendChild(card);
+        mountMediaElement('audio', record);
+      }
+    }).catch(function (err) { console.warn('Could not read the foreground media:', err); });
+  }
+
+  /** Shows a typed quote and optional attribution. */
+  function renderText(text) {
+    teardownForeground();
+    text = text || {};
+    el.fgQuote.textContent = text.text || '';
+    if (text.attribution) {
+      el.fgAttribution.textContent = text.attribution;
+      el.fgAttribution.hidden = false;
+    } else {
+      el.fgAttribution.textContent = '';
+      el.fgAttribution.hidden = true;
+    }
+  }
+
+  /** Switches the whole foreground: which layer is visible, and whether the
+   *  glass panel is shown at all. Called for every push, so it must be
+   *  idempotent — re-mounting a playing video on every silent verse step would
+   *  restart it from the beginning. The body is only rebuilt when the
+   *  descriptor actually changes. */
+  var appliedForegroundKey = null;
+
+  function foregroundKey(fg) {
+    if (fg.kind === 'media') return 'media|' + JSON.stringify(fg.media || null);
+    if (fg.kind === 'text') return 'text|' + JSON.stringify(fg.text || null);
+    return fg.kind;
+  }
+
+  function renderForeground() {
+    var fg = state.foreground;
+    var key = foregroundKey(fg);
+    var changed = key !== appliedForegroundKey;
+    appliedForegroundKey = key;
+
+    if (fg.kind === 'media') {
+      el.fgLayer.hidden = false;
+      el.textLayer.hidden = true;
+      if (changed) renderMedia(fg.media);
+    } else if (fg.kind === 'text') {
+      el.fgLayer.hidden = true;
+      el.textLayer.hidden = false;
+      if (changed) renderText(fg.text);
+    } else {
+      // 'panel' or 'none': no foreground media or quote.
+      if (changed) teardownForeground();
+      el.fgLayer.hidden = true;
+      el.textLayer.hidden = true;
+    }
+
+    var showPanel = fg.kind === 'panel';
+    el.timerView.style.display = showPanel && state.mode === 'timer' ? 'flex' : 'none';
+    el.clockView.style.display = showPanel && state.mode === 'clock' ? 'flex' : 'none';
+    el.scriptureView.style.display = showPanel && state.mode === 'scripture' ? 'flex' : 'none';
+    el.lyricsView.style.display = showPanel && state.mode === 'lyrics' ? 'flex' : 'none';
+
+    // 'none' is the "No Display" switch: the background is the whole show.
+    document.body.classList.toggle('no-foreground', fg.kind === 'none');
+  }
+
+  function rememberForeground(descriptor) {
+    try {
+      localStorage.setItem(FG_CHOICE_KEY, JSON.stringify({
+        kind: descriptor.kind,
+        media: descriptor.kind === 'media' ? descriptor.media : null,
+        text: descriptor.kind === 'text' ? descriptor.text : null
+      }));
+    } catch (err) {}
+  }
+
+  /** Re-applies the last live foreground after a projector restart. The bytes
+   *  are still in the shared store, so a photo or video comes back on its own;
+   *  a camera feed is deliberately *not* reopened without the console. */
+  function restoreForeground() {
+    var saved = null;
+    try { saved = JSON.parse(localStorage.getItem(FG_CHOICE_KEY) || 'null'); } catch (err) {}
+    if (!saved || !saved.kind || saved.kind === 'panel') return;
+    if (saved.kind === 'media' && saved.media && saved.media.kind === 'camera') return;
+    state.foreground = {
+      kind: saved.kind,
+      media: saved.media || null,
+      text: saved.text || { text: '', attribution: '' }
+    };
+    renderForeground();
+  }
+
+  /* ==========================================================================
      9. THE BUS
      ========================================================================== */
 
@@ -578,6 +817,19 @@
       };
     }
 
+    // The foreground rides on every push, so it survives a console refresh.
+    // Without one, keep whatever is already showing.
+    if (message.foreground) {
+      var fg = message.foreground;
+      state.foreground = {
+        kind: fg.kind || 'panel',
+        media: fg.media || null,
+        text: fg.text || { text: '', attribution: '' }
+      };
+      rememberForeground(state.foreground);
+    }
+
+    renderForeground();
     setMode(state.mode);
 
     // The photo only changes on an explicit backdrop action, so re-read the
@@ -585,11 +837,15 @@
     if (message.backgroundChanged) refreshBackgroundFromStore();
   }
 
+  /** Shows the one panel that matches the mode (the foreground decides whether
+   *  any panel is shown at all; renderForeground owns that). */
   function setMode(mode) {
-    el.timerView.style.display = mode === 'timer' ? 'flex' : 'none';
-    el.clockView.style.display = mode === 'clock' ? 'flex' : 'none';
-    el.scriptureView.style.display = mode === 'scripture' ? 'flex' : 'none';
-    el.lyricsView.style.display = mode === 'lyrics' ? 'flex' : 'none';
+    if (state.foreground.kind === 'panel') {
+      el.timerView.style.display = mode === 'timer' ? 'flex' : 'none';
+      el.clockView.style.display = mode === 'clock' ? 'flex' : 'none';
+      el.scriptureView.style.display = mode === 'scripture' ? 'flex' : 'none';
+      el.lyricsView.style.display = mode === 'lyrics' ? 'flex' : 'none';
+    }
 
     if (mode === 'timer') renderTimer();
     if (mode === 'clock') {
@@ -668,6 +924,7 @@
     if (isPreview) document.body.classList.add('is-preview');
 
     setMode(state.mode);
+    restoreForeground(); // the remembered media/quote, if the console is away
     fitPreview();
     handleResize();
     requestAnimationFrame(frame);

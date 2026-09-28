@@ -34,6 +34,29 @@ This is the core design; understand it before touching either page.
 The countdown timer is a live change too: it re-renders each second on both
 screens so it stays accurate without being re-launched.
 
+## The foreground
+
+In front of the background there is a **foreground**, chosen on the console's
+`#foreground-toggle-group`. Exactly one of four states is live:
+
+| State | On screen |
+| --- | --- |
+| Panel | the mode's own glass panel (timer / clock / scripture / lyrics) |
+| Media | `#fg-layer` — a photo, video, GIF, audio file or the display's camera |
+| Text | `#text-layer` — a typed quote plus optional attribution |
+| No Display | neither — the background shows alone (body gets `.no-foreground`) |
+
+Media and text are **live changes** (like the backdrop): they go straight to
+the screen without a launch, because the operator is looking at the item they
+chose. The panel itself is launched as before.
+
+Media bytes are never sent over the bus. The console writes the file into the
+shared IndexedDB `foreground` store and pushes only a descriptor
+(`{kind, mime, name}`); the display reads the record back. A camera feed is
+the one exception: it is a live device stream, so the descriptor says
+`camera` and the display opens its own `getUserMedia`. The descriptor rides on
+every `push`, so it survives a console refresh.
+
 ## File map
 
 | File | Notes |
@@ -58,10 +81,11 @@ screens so it stays accurate without being re-launched.
 - `EWC.SONGS_KEY` (`ewc-display-songs-v1`) — `localStorage`, song library.
 - `CHOICE_KEY` (`ewc-display-bg-choice-v1`) — `localStorage`, whether a
   backdrop photo is set.
-- `IndexedDB` database `ewc-display-media` — the backdrop photo bytes. A
+- `IndexedDB` database `ewc-display-media` — two object stores. `backgrounds`
+  holds the backdrop photo bytes (the console downscales before storing);
+  `foreground` holds the foreground media file plus its name/mime/kind. A
   camera JPEG is far too big for `localStorage` and a blob URL does not cross
-  windows, so the bytes go here and the bus only carries the nudge. The
-  console downscales before storing.
+  windows, so the bytes go here and the bus only carries the nudge.
 
 ## Gotchas learned the hard way
 
@@ -81,15 +105,31 @@ screens so it stays accurate without being re-launched.
   testable directly.
 - Test the two pages as **separate browser pages in one context** — they need
   a shared origin for `BroadcastChannel` to work.
+- **The lyric track rebuilds on title *and* lines, not the title alone.** An
+  edited song keeps its title but rewrites its lines, so keying the rebuild on
+  the title left the old words on screen after an edit.
+- **`renderForeground()` must be idempotent.** It runs on every push, and a
+  silent verse/lyric step re-pushes the state; remounting the media on each
+  one would restart a playing video. It keys on the foreground descriptor and
+  only rebuilds when that changes.
+- **Media bytes never ride the bus.** The console stores the file in IndexedDB
+  and pushes a descriptor; the display reads it back. A camera feed is opened
+  by the display itself with `getUserMedia`.
 
 ## Testing
 
-There is no committed test suite. Verification has been done with Playwright
-driving `serve.py` and two pages in one browser context, asserting: page
-errors, absence of controls on the display, launch vs preview behaviour,
-silent arrow-key stepping, revision handling across a console reload, a second
-display window, backdrop persistence across reloads, and preview 16:9 geometry.
+Playwright suites live in `tests/`, each starting its own `serve.py` and
+driving real pages over a real `BroadcastChannel`:
 
-`pip install playwright && playwright install chromium` sets it up. Scripts
-have been kept out of the repo (throwaway, in `/tmp`); if you add a suite,
-prefer a single `tests/` directory over ad-hoc `_*.py` files at the root.
+```sh
+pip install playwright && playwright install chromium
+python3 tests/test_console_display.py   # the console/display split
+python3 tests/test_persistence.py       # backdrop + song persistence
+python3 tests/test_display_features.py  # type sizes + the foreground features
+```
+
+They cover: page errors, absence of controls on the display, launch vs preview
+behaviour, silent arrow-key stepping, revision handling across a console
+reload, a second display window, backdrop persistence across reloads, preview
+16:9 geometry, the enlarged lyrics/scripture/clock/timer type, and all four
+foreground states (media, text, No Display, plus editing a song's lyrics).

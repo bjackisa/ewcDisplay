@@ -45,12 +45,56 @@
     <aside id="settings-panel">
 
       <div class="field">
-        <label>Show</label>
+        <label>Panel content</label>
         <div class="segmented" id="mode-toggle-group" role="group">
           <button type="button" data-mode="timer" class="active">Countdown timer</button>
           <button type="button" data-mode="clock">Analog clock</button>
           <button type="button" data-mode="scripture">Scripture</button>
           <button type="button" data-mode="lyrics">Lyrics</button>
+        </div>
+        <p class="hint">What the glass panel shows when the foreground is set to “Panel”.</p>
+      </div>
+
+      <hr class="sep">
+
+      <!-- Foreground: what sits in front of the background, in place of the
+           glass panel. "No Display" hides everything and leaves the backdrop. -->
+      <div class="field">
+        <label>Foreground</label>
+        <div class="segmented" id="foreground-toggle-group" role="group">
+          <button type="button" data-fg="panel" class="active">Panel</button>
+          <button type="button" data-fg="media">Media</button>
+          <button type="button" data-fg="text">Text</button>
+          <button type="button" data-fg="none">No Display</button>
+        </div>
+        <p class="hint">“No Display” clears the foreground and leaves just the background image.</p>
+      </div>
+
+      <div id="foreground-fields">
+        <!-- Media -->
+        <div id="fg-media-fields">
+          <div class="file-row">
+            <button class="btn" id="fg-media-btn">Choose photo / video / GIF / audio…</button>
+          </div>
+          <input type="file" id="fg-media-input" accept="image/*,video/*,audio/*">
+          <div class="file-row" style="margin-top:.5rem;">
+            <button class="btn" id="fg-camera-btn">Use camera</button>
+            <button class="btn" id="fg-media-clear-btn">Remove</button>
+          </div>
+          <p class="hint" id="fg-media-status" style="margin-top:.5rem;"></p>
+          <p class="hint">Photos, GIFs, videos and audio are copied to the display’s own store, so they play even if this window is closed. The camera feed is opened on the display device itself.</p>
+        </div>
+
+        <!-- Text -->
+        <div id="fg-text-fields">
+          <div class="field" style="margin-top:1rem;">
+            <label for="fg-text-input">Text to display</label>
+            <textarea id="fg-text-input" placeholder="Type a verse, a quote, an announcement…"></textarea>
+          </div>
+          <div class="field" style="margin-top:.7rem;">
+            <label for="fg-attribution-input">Attribution (optional)</label>
+            <input type="text" id="fg-attribution-input" maxlength="80" placeholder="e.g. Psalm 23:1">
+          </div>
         </div>
       </div>
 

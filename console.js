@@ -49,7 +49,17 @@
     scriptureChapter: 2,
     scriptureVerse: 4,
     activeSongId: null,
-    lyricLineIndex: 0
+    lyricLineIndex: 0,
+    /* What sits in the foreground, in place of the glass panel:
+         'panel'  the mode's own panel (scripture/lyrics/timer/clock)
+         'media'  a photo, video, GIF, audio file or the camera feed
+         'text'   a typed quote
+         'none'   nothing — just the background ("No Display") */
+    foreground: {
+      kind: 'panel',
+      media: null,                                   // {kind, mime, name} once set
+      text: { text: '', attribution: '' }
+    }
   };
 
   /** The last thing launched. `null` mode means nothing has been launched. */
@@ -57,14 +67,21 @@
 
   var bibleData = null;
   var songs = [];
+  var editingSongId = null; // non-null while a song is loaded into the form
   var revision = 0;
   var sessionId = 'session-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
 
   /** Serialised snapshot of what is on the screen, for comparing against the
-   *  preview to tell whether the operator has edited what was launched. */
+   *  preview to tell whether the operator has edited what was launched. The
+   *  foreground is part of the show, so it is part of the fingerprint too —
+   *  otherwise changing only the foreground would look like "still live".
+   *  When the foreground is not the panel, the panel's mode and content are
+   *  hidden on screen, so they are left out of the comparison. */
   function fingerprint(mode, content) {
     if (mode === null) return '';
-    return mode + '|' + JSON.stringify(content || null);
+    var fg = preview.foreground;
+    if (fg && fg.kind && fg.kind !== 'panel') return 'fg|' + JSON.stringify(fg);
+    return mode + '|' + JSON.stringify(content || null) + '|' + JSON.stringify(fg);
   }
 
   /* ==========================================================================
@@ -83,6 +100,17 @@
 
     settingsPanel: document.getElementById('settings-panel'),
     modeToggleGroup: document.getElementById('mode-toggle-group'),
+    foregroundToggleGroup: document.getElementById('foreground-toggle-group'),
+    foregroundFields: document.getElementById('foreground-fields'),
+    fgMediaFields: document.getElementById('fg-media-fields'),
+    fgTextFields: document.getElementById('fg-text-fields'),
+    fgMediaBtn: document.getElementById('fg-media-btn'),
+    fgMediaInput: document.getElementById('fg-media-input'),
+    fgCameraBtn: document.getElementById('fg-camera-btn'),
+    fgMediaClearBtn: document.getElementById('fg-media-clear-btn'),
+    fgMediaStatus: document.getElementById('fg-media-status'),
+    fgTextInput: document.getElementById('fg-text-input'),
+    fgAttributionInput: document.getElementById('fg-attribution-input'),
     eventNameInput: document.getElementById('event-name-input'),
     targetDatetimeInput: document.getElementById('target-datetime-input'),
     nextSundayBtn: document.getElementById('next-sunday-btn'),
@@ -130,7 +158,8 @@
         scriptureChapter: preview.scriptureChapter,
         scriptureVerse: preview.scriptureVerse,
         activeSongId: preview.activeSongId,
-        lyricLineIndex: preview.lyricLineIndex
+        lyricLineIndex: preview.lyricLineIndex,
+        foreground: preview.foreground
       }));
     } catch (err) {
       console.warn('Could not save settings:', err);
@@ -153,6 +182,18 @@
     if (mode === 'scripture') return content.reference || 'scripture';
     if (mode === 'lyrics') return content.title ? 'lyrics — ' + content.title : 'lyrics';
     return mode;
+  }
+
+  /** Describes what is in the foreground, for the launch note. */
+  function describeForeground() {
+    var fg = preview.foreground;
+    if (fg.kind === 'media') {
+      if (fg.media && fg.media.kind === 'camera') return 'the camera feed';
+      return fg.media && fg.media.name ? fg.media.name : 'the selected media';
+    }
+    if (fg.kind === 'text') return 'the displayed text';
+    if (fg.kind === 'none') return 'no display (background only)';
+    return null;
   }
 
   /** Turns the preview state into the `content` payload the display applies. */
@@ -194,7 +235,11 @@
       session: sessionId,
       revision: revisionNumber,
       mode: state.mode,
-      content: buildContent(state)
+      content: buildContent(state),
+      // The foreground descriptor rides on every push. For media it names the
+      // file but carries no bytes — the display reads those from the shared
+      // store, so a 200 MB video never crosses the bus.
+      foreground: state.foreground
     };
   }
 
@@ -226,7 +271,8 @@
     previewWindow.__ewcPreview.apply({
       revision: Date.now(),
       mode: preview.mode,
-      content: buildContent(preview)
+      content: buildContent(preview),
+      foreground: preview.foreground
     });
   }
 
@@ -254,7 +300,9 @@
       el.previewNote.dataset.state = 'idle';
       return;
     }
-    el.previewNote.textContent = 'Live on the church screen: ' + describe(live.mode, live.content) + '.';
+    var fgNote = describeForeground();
+    el.previewNote.textContent = 'Live on the church screen: ' + describe(live.mode, live.content) +
+      (fgNote ? ' · foreground: ' + fgNote : '') + '.';
     el.previewNote.dataset.state = 'live';
   }
 
@@ -553,6 +601,14 @@
       load.title = 'Preview ' + song.title;
       load.addEventListener('click', function () { showSong(song.id); });
 
+      var edit = document.createElement('button');
+      edit.type = 'button';
+      edit.className = 'song-edit';
+      edit.textContent = '\u270E';
+      edit.title = 'Edit ' + song.title;
+      edit.setAttribute('aria-label', 'Edit ' + song.title);
+      edit.addEventListener('click', function () { startEditingSong(song.id); });
+
       var remove = document.createElement('button');
       remove.type = 'button';
       remove.className = 'song-delete';
@@ -562,9 +618,32 @@
       remove.addEventListener('click', function () { deleteSong(song.id); });
 
       row.appendChild(load);
+      row.appendChild(edit);
       row.appendChild(remove);
       el.songList.appendChild(row);
     });
+  }
+
+  /** Loads a song into the form for editing and remembers which one it is, so
+   *  "Save song" updates it in place rather than matching on the title. */
+  function startEditingSong(id) {
+    var song = songs.find(function (s) { return s.id === id; });
+    if (!song) return;
+    editingSongId = id;
+    el.songTitleInput.value = song.title;
+    el.songLyricsInput.value = song.lines.join('\n');
+    el.songSaveBtn.textContent = 'Update song';
+    setSongStatus('Editing “' + song.title + '”. Save to keep your changes.');
+    el.songTitleInput.focus();
+    el.songLyricsInput.scrollIntoView({ block: 'nearest' });
+  }
+
+  /** Leaves edit mode and clears the form. */
+  function resetSongForm() {
+    editingSongId = null;
+    el.songTitleInput.value = '';
+    el.songLyricsInput.value = '';
+    el.songSaveBtn.textContent = 'Save song';
   }
 
   function saveSongFromForm() {
@@ -582,21 +661,27 @@
       return;
     }
 
-    // Same title = an edit, so re-saving updates rather than duplicating.
-    var existing = songs.find(function (song) { return song.title.toLowerCase() === title.toLowerCase(); });
+    // Editing an existing song updates it in place. Otherwise the same title
+    // means an edit too, so re-saving updates rather than duplicating.
+    var existing = editingSongId
+      ? songs.find(function (song) { return song.id === editingSongId; })
+      : songs.find(function (song) { return song.title.toLowerCase() === title.toLowerCase(); });
     var song = existing || { id: makeSongId(), title: title, lines: [], updatedAt: 0 };
+    var wasEdit = !!existing;
     song.title = title;
     song.lines = lines;
     song.updatedAt = Date.now();
     if (!existing) songs.push(song);
     if (!saveSongs()) return;
 
-    el.songTitleInput.value = '';
-    el.songLyricsInput.value = '';
-    setSongStatus(existing ? 'Updated “' + title + '”.' : 'Saved “' + title + '”.');
+    resetSongForm();
+    setSongStatus(wasEdit ? 'Updated “' + title + '”.' : 'Saved “' + title + '”.');
 
     showSong(song.id);
     setMode('lyrics');
+    // If the edited song is the one already live, push the new lyrics to the
+    // screen so the edit is not stuck in the console.
+    if (liveMatchesMode('lyrics')) pushLive(false);
   }
 
   function deleteSong(id) {
@@ -605,6 +690,7 @@
       preview.activeSongId = null;
       preview.lyricLineIndex = 0;
     }
+    if (editingSongId === id) resetSongForm();
     saveSongs();
     renderSongList();
     afterPreviewChange();
@@ -707,6 +793,116 @@
   }
 
   /* ==========================================================================
+     11b. FOREGROUND — media, typed text, or nothing
+     All three are live changes: like the backdrop photo, the foreground goes
+     straight to the screen without a launch, because there is nothing to
+     "review" — the operator is looking at the item they chose. Media bytes are
+     copied into the shared IndexedDB store and only a descriptor is announced;
+     the display reads the bytes back. A camera feed is a live device stream,
+     so only the descriptor crosses — the display opens its own camera.
+     ========================================================================== */
+
+  var MAX_FG_BYTES = 512 * 1024 * 1024;
+
+  function setFgStatus(message) {
+    el.fgMediaStatus.textContent = message || '';
+    el.fgMediaStatus.style.display = message ? 'block' : 'none';
+  }
+
+  /** Maps a file's MIME type to the display's own media kinds. */
+  function mediaKindFor(file) {
+    if (file.type.indexOf('image/') === 0) return 'image';
+    if (file.type.indexOf('video/') === 0) return 'video';
+    if (file.type.indexOf('audio/') === 0) return 'audio';
+    return null;
+  }
+
+  /** Sends the current foreground to the screen and paints the preview. This
+   *  is a live change (like the backdrop), so it goes straight out. */
+  function applyForeground() {
+    pushLive(false);
+    savePersisted();
+  }
+
+  function setForegroundKind(kind) {
+    preview.foreground.kind = kind;
+    renderForegroundFields();
+    el.foregroundToggleGroup.querySelectorAll('button').forEach(function (btn) {
+      btn.classList.toggle('active', btn.dataset.fg === kind);
+    });
+    applyForeground();
+  }
+
+  /** Dims the field groups that the chosen foreground doesn't use. */
+  function renderForegroundFields() {
+    var kind = preview.foreground.kind;
+    el.fgMediaFields.style.opacity = kind === 'media' ? '1' : '.4';
+    el.fgTextFields.style.opacity = kind === 'text' ? '1' : '.4';
+  }
+
+  el.foregroundToggleGroup.addEventListener('click', function (e) {
+    var btn = e.target.closest('button[data-fg]');
+    if (btn) setForegroundKind(btn.dataset.fg);
+  });
+
+  el.fgMediaInput.addEventListener('change', function (e) {
+    var file = e.target.files && e.target.files[0];
+    el.fgMediaInput.value = '';
+    if (!file) return;
+    var kind = mediaKindFor(file);
+    if (!kind) { setFgStatus('That file type is not supported — choose an image, video or audio file.'); return; }
+    if (file.size > MAX_FG_BYTES) { setFgStatus('That file is too large to display.'); return; }
+
+    // Read the file as a Blob and hand the display the same record it will
+    // read back from the store, so a photo, GIF, video or audio all travel
+    // the one path.
+    EWC.putForegroundMedia({ kind: kind, mime: file.type, name: file.name, blob: file })
+      .then(function () {
+        preview.foreground.media = { kind: kind, mime: file.type, name: file.name };
+        setFgStatus('Showing ' + file.name + '.');
+        setForegroundKind('media');
+      })
+      .catch(function (err) {
+        console.warn('Could not store the foreground media:', err);
+        setFgStatus('Could not store that file on this device.');
+      });
+  });
+
+  el.fgMediaBtn.addEventListener('click', function () { el.fgMediaInput.click(); });
+
+  el.fgCameraBtn.addEventListener('click', function () {
+    // No bytes to store: the display opens its own camera when it sees this.
+    EWC.putForegroundMedia(null).catch(function () {});
+    preview.foreground.media = { kind: 'camera', mime: '', name: 'Camera' };
+    setFgStatus('Camera requested — the display device will ask to use its camera.');
+    setForegroundKind('media');
+  });
+
+  el.fgMediaClearBtn.addEventListener('click', function () {
+    EWC.putForegroundMedia(null).catch(function () {});
+    preview.foreground.media = null;
+    setFgStatus('Foreground media removed.');
+    setForegroundKind('panel');
+  });
+
+  function readTextFields() {
+    preview.foreground.text = {
+      text: el.fgTextInput.value.trim(),
+      attribution: el.fgAttributionInput.value.trim()
+    };
+  }
+
+  el.fgTextInput.addEventListener('input', function () {
+    readTextFields();
+    if (preview.foreground.kind === 'text') applyForeground();
+  });
+
+  el.fgAttributionInput.addEventListener('input', function () {
+    readTextFields();
+    if (preview.foreground.kind === 'text') applyForeground();
+  });
+
+  /* ==========================================================================
      12. MODE SWITCHING + TIMER FIELDS
      ========================================================================== */
 
@@ -777,6 +973,19 @@
     el.scriptureChapterInput.value = preview.scriptureChapter;
     el.scriptureVerseInput.value = preview.scriptureVerse;
     renderSongList();
+
+    // Foreground controls: reflect the restored foreground state.
+    el.fgTextInput.value = preview.foreground.text.text || '';
+    el.fgAttributionInput.value = preview.foreground.text.attribution || '';
+    el.foregroundToggleGroup.querySelectorAll('button').forEach(function (btn) {
+      btn.classList.toggle('active', btn.dataset.fg === preview.foreground.kind);
+    });
+    renderForegroundFields();
+    if (preview.foreground.media && preview.foreground.media.name) {
+      setFgStatus(preview.foreground.media.kind === 'camera'
+        ? 'Camera requested.'
+        : 'Showing ' + preview.foreground.media.name + '.');
+    }
 
     // Paint the iframe. It may already be loaded when this runs (cache), in
     // which case the `load` event will never fire again.

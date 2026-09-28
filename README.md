@@ -47,6 +47,32 @@ Three kinds of change:
 The countdown timer runs live on both screens, so it never needs launching to
 stay accurate.
 
+## The foreground
+
+In front of the background sits a **foreground**, chosen in the console's
+**Foreground** row. Exactly one of four things is on the screen:
+
+| Foreground | What shows |
+| --- | --- |
+| **Panel** | the glass panel for the chosen mode — countdown, clock, scripture or lyrics |
+| **Media** | a photo, video, GIF or audio file, or the display's own camera feed |
+| **Text** | a typed quote, with an optional attribution line |
+| **No Display** | nothing — just the background image |
+
+Media and text go to the screen **straight away**, like the backdrop photo:
+they are not launched, because the operator is looking at the item they chose.
+The panel is still launched as before.
+
+Media files are copied into the display's own store, so a photo, GIF or video
+keeps playing even if the console window is closed. The camera feed is opened
+on the display device itself, so the projector's webcam is the one that shows.
+
+## Editing lyrics
+
+Every song in the list has a pencil button. It loads the song into the form
+(the save button reads **Update song**); saving changes it in place, so the
+song is never duplicated and an already-live song updates on screen at once.
+
 ## Files
 
 | File | Purpose |
@@ -66,10 +92,11 @@ stay accurate.
 
 - **`localStorage`** — text settings and the song library, so both windows
   survive a restart. The console is the only writer of songs.
-- **`IndexedDB`** (`ewc-display-media`) — the background photo. A camera JPEG is
-  far too big for `localStorage`, and an object URL would not cross windows.
-  The console bakes the photo down to a sane size before storing it. This is a
-  live change: the backdrop goes straight to the screen, never launched.
+- **`IndexedDB`** (`ewc-display-media`) — two stores. `backgrounds` holds the
+  backdrop photo (a camera JPEG is far too big for `localStorage`, and an
+  object URL would not cross windows; the console bakes it down to a sane size
+  first). `foreground` holds the foreground media file. Both are live changes
+  that go straight to the screen, never launched.
 - **`BroadcastChannel`** (`ewc-display-bus`) — messages between the two windows.
 
 Both pages must be served from the same origin for the link between them to

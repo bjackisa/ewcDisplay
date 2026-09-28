@@ -251,36 +251,44 @@
   EWC.SETTINGS_KEY = 'ewc-display-settings-v1';
   EWC.SONGS_KEY = 'ewc-display-songs-v1';
 
-  /* -- Durable background-image store ---------------------------------------
-     The backdrop for the live lyrics is whatever is on the church PC's
-     Desktop. The console drops the chosen photo into this shared IndexedDB
-     store, the display reads it back — both pages are served from the same
-     origin, so they see the same database. An object URL would not cross
-     windows, and localStorage has no room for a multi-MB photo. */
-  var IMG_DB = 'ewc-display-media';
-  var IMG_STORE = 'backgrounds';
-  var IMG_KEY = 'active';
+  /* -- Durable media store ---------------------------------------------------
+     Two things are far too big for localStorage and cannot cross windows as an
+     object URL, so both live in one shared IndexedDB database that every page
+     on this origin can read:
 
-  function openImageDB() {
+       * 'backgrounds' — the backdrop photo. The console drops the chosen bytes
+         in, the display reads them back. The bus only carries a nudge.
+       * 'foreground'  — the media shown inside the glass panel (a photo,
+         video, GIF or audio file). Same deal: the console stores a Blob plus
+         its name/mime/kind, the display reads the record back. Camera feeds
+         are not stored — the display opens its own camera. */
+  var MEDIA_DB = 'ewc-display-media';
+  var MEDIA_DB_VERSION = 2;
+  var BG_STORE = 'backgrounds';
+  var FG_STORE = 'foreground';
+  var BG_KEY = 'active';
+  var FG_KEY = 'active';
+
+  function openMediaDB() {
     return new Promise(function (resolve, reject) {
       if (!global.indexedDB) { reject(new Error('IndexedDB unavailable')); return; }
-      var request = indexedDB.open(IMG_DB, 1);
+      var request = indexedDB.open(MEDIA_DB, MEDIA_DB_VERSION);
       request.onupgradeneeded = function () {
-        if (!request.result.objectStoreNames.contains(IMG_STORE)) {
-          request.result.createObjectStore(IMG_STORE);
-        }
+        var db = request.result;
+        if (!db.objectStoreNames.contains(BG_STORE)) db.createObjectStore(BG_STORE);
+        if (!db.objectStoreNames.contains(FG_STORE)) db.createObjectStore(FG_STORE);
       };
       request.onsuccess = function () { resolve(request.result); };
       request.onerror = function () { reject(request.error); };
     });
   }
 
-  /** Runs one transaction against the media store. */
-  function withImageStore(mode, work) {
-    return openImageDB().then(function (db) {
+  /** Runs one transaction against a named store in the media database. */
+  function withStore(storeName, mode, work) {
+    return openMediaDB().then(function (db) {
       return new Promise(function (resolve, reject) {
-        var tx = db.transaction(IMG_STORE, mode);
-        var request = work(tx.objectStore(IMG_STORE));
+        var tx = db.transaction(storeName, mode);
+        var request = work(tx.objectStore(storeName));
         tx.oncomplete = function () { resolve(request && request.result); };
         tx.onerror = function () { reject(tx.error); };
         tx.onabort = function () { reject(tx.error); };
@@ -290,20 +298,37 @@
 
   /** Stores the baked background image (an ArrayBuffer, or null to clear). */
   function putBackgroundImage(data) {
-    return withImageStore('readwrite', function (store) {
-      return data ? store.put(data, IMG_KEY) : store.delete(IMG_KEY);
+    return withStore(BG_STORE, 'readwrite', function (store) {
+      return data ? store.put(data, BG_KEY) : store.delete(BG_KEY);
     });
   }
 
   /** Reads back the stored background image, or null when none is set. */
   function getBackgroundImage() {
-    return withImageStore('readonly', function (store) {
-      return store.get(IMG_KEY);
+    return withStore(BG_STORE, 'readonly', function (store) {
+      return store.get(BG_KEY);
+    }).catch(function () { return null; });
+  }
+
+  /** Stores the foreground media record ({kind, mime, name, blob}), or clears
+   *  it when passed null. */
+  function putForegroundMedia(record) {
+    return withStore(FG_STORE, 'readwrite', function (store) {
+      return record ? store.put(record, FG_KEY) : store.delete(FG_KEY);
+    });
+  }
+
+  /** Reads back the foreground media record, or null when none is set. */
+  function getForegroundMedia() {
+    return withStore(FG_STORE, 'readonly', function (store) {
+      return store.get(FG_KEY);
     }).catch(function () { return null; });
   }
 
   EWC.putBackgroundImage = putBackgroundImage;
   EWC.getBackgroundImage = getBackgroundImage;
+  EWC.putForegroundMedia = putForegroundMedia;
+  EWC.getForegroundMedia = getForegroundMedia;
 
   EWC.pad2 = pad2;
   EWC.nextSunday9am = nextSunday9am;

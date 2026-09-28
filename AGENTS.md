@@ -44,10 +44,10 @@ the operator always sees it before the congregation does.
 
 The console has a **mode picker** (`#mode-toggle-group`) naming what goes on
 the glass panel: timer, clock, scripture, lyrics, text, media, camera. Only the
-chosen mode's own fields are shown (`#mode-fields > div[data-mode]` are all
-present in the DOM; `setMode()` hides all but one), so the operator sees one
-mode's controls rather than every control at once. The picker itself is
-`position:sticky` at the top of the rail.
+chosen mode's own fields are shown: `#mode-fields` holds one `#<mode>-fields`
+block per mode and `setMode()` hides all but the chosen one, so the operator
+sees one mode's controls rather than every control at once. The picker itself
+is `position:sticky` at the top of the rail.
 
 | Mode | On screen |
 | --- | --- |

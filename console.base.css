@@ -121,14 +121,19 @@ body.ui-visible .chrome{
 .field-row{ display:flex; gap:.6rem; }
 .field-row .field{ flex:1; }
 
+/* The panel-content picker carries seven labels, too many for one row of the
+   rail. Let it wrap onto as many lines as it needs so every mode stays
+   reachable instead of being clipped by the container. */
 .segmented{
   display:flex;
+  flex-wrap:wrap;
   border:1px solid var(--glass-border);
   border-radius:.7rem;
   overflow:hidden;
 }
 .segmented button{
-  flex:1;
+  flex:1 1 6.5rem;
+  min-width:6.5rem;
   padding:.6rem .5rem;
   background:transparent;
   border:none;

@@ -312,7 +312,7 @@ button, input{ font-family:inherit; }
 #scripture-view{ display:none; }
 
 .scripture-panel{
-  max-width:min(78vw, 54rem);
+  max-width:min(84vw, 62rem);
 }
 
 .scripture-text{
@@ -320,10 +320,11 @@ button, input{ font-family:inherit; }
   font-style:italic;
   font-weight:500;
   /* Sized for the back row: the verse is the whole point of the view, so it
-     carries the panel rather than sitting in it. display.js shrinks a long
-     verse to fit; a line wraps rather than shrinking below legibility. */
-  font-size:clamp(2.2rem, 4.4vw, 4.4rem);
-  line-height:1.28;
+     carries the panel rather than sitting in it. A longer verse is allowed to
+     wrap onto more lines — the panel grows with it — and display.js only
+     scales the very longest verses down, never below legibility. */
+  font-size:clamp(2.8rem, 5.4vw, 5.4rem);
+  line-height:1.24;
   color:var(--cloud);
   text-align:center;
   text-shadow:0 2px 14px rgba(0,0,0,.35);
@@ -333,7 +334,7 @@ button, input{ font-family:inherit; }
 .scripture-reference{
   font-family:var(--font-display);
   font-weight:600;
-  font-size:clamp(1.1rem, 1.9vw, 1.9rem);
+  font-size:clamp(1.4rem, 2.3vw, 2.3rem);
   color:var(--sunrise-amber);
   letter-spacing:.02em;
   text-shadow:0 2px 12px rgba(0,0,0,.35);
@@ -364,7 +365,7 @@ button, input{ font-family:inherit; }
      item, so the scrollport's own width:100% has nothing to resolve against
      and collapses — which would wrap every lyric into a sliver. Wider than it
      once was so the enlarged type still gets a full line before it wraps. */
-  width:min(86vw, 68rem);
+  width:min(90vw, 76rem);
   max-width:100%;
   /* Let the mask breathe over the panel's own padding. */
   padding-inline:clamp(1.4rem, 4vw, 4rem);
@@ -373,7 +374,7 @@ button, input{ font-family:inherit; }
 .lyrics-title{
   font-family:var(--font-display);
   font-weight:600;
-  font-size:clamp(1.1rem, 1.9vw, 1.8rem);
+  font-size:clamp(1.6rem, 2.9vw, 2.9rem);
   letter-spacing:.14em;
   text-transform:uppercase;
   color:var(--sunrise-amber);
@@ -385,7 +386,7 @@ button, input{ font-family:inherit; }
 .lyrics-scrollport{
   position:relative;
   width:100%;
-  height:min(58vh, 30rem);
+  height:min(70vh, 38rem);
   overflow:hidden;
   /* Fades the neighbouring lines out towards the top and bottom edges. */
   -webkit-mask-image:linear-gradient(to bottom,
@@ -406,7 +407,7 @@ button, input{ font-family:inherit; }
   /* min-height, not height: a long line is allowed to wrap to a second row.
      margin:0 matters too — each row is a <p>, and the default 1em vertical
      margin would inflate the stride and collapse between siblings. */
-  min-height:clamp(3.6rem, 9.2vh, 6.4rem);
+  min-height:clamp(4.6rem, 11.6vh, 8.4rem);
   margin:0;
   display:flex;
   align-items:center;
@@ -415,11 +416,10 @@ button, input{ font-family:inherit; }
   overflow-wrap:break-word;
   font-family:var(--font-editorial);
   font-weight:500;
-  /* Much larger than the old drawer-sized type: this is the line the
-     congregation reads from the back of the room. A long line wraps to a new
-     row (min-height, not height) rather than being shrunk to fit. */
-  font-size:clamp(2rem, 3.9vw, 3.9rem);
-  line-height:1.2;
+  /* Sized for the back row: this is the line the congregation reads. A long
+     line wraps to a new row (min-height, not height) rather than shrinking. */
+  font-size:clamp(3rem, 6vw, 6rem);
+  line-height:1.18;
   color:var(--cloud);
   opacity:.3;
   transform:scale(.94);
@@ -448,63 +448,76 @@ button, input{ font-family:inherit; }
 }
 
 /* ==========================================================================
-   5b. FOREGROUND LAYERS — media and typed text, shown *instead of* the glass
-   panel rather than on top of it, so nothing competes for the same space.
-   The console decides which of the four foreground states is live:
+   5b. TEXT, MEDIA AND CAMERA PANELS — the same glass panel, dressed three
+   more ways. Here rather than off to the side, so nothing competes with the
+   background: everything is on the panel except "No Panel", which removes
+   the glass altogether and leaves only the background.
+   ========================================================================== */
+#text-view, #media-view, #camera-view{ display:none; }
 
-     panel (none)   the glass panel above
-     media          #fg-layer — a photo, video, GIF, audio file or camera feed
-     text           #text-layer — a typed quote
-     no display     both hidden, leaving only the background
-
-   Both layers are 16:9, matching the stage, so a photo or video is not
-   cropped differently from the frame it lands on. */
-#fg-layer, #text-layer{
-  position:absolute; inset:0;
-  z-index:6;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  padding:clamp(1.5rem, 3.5vh, 3.5rem);
+/* -- Text: dressed like the scripture panel. The body takes the verse
+      treatment (.scripture-text); the title takes the reference treatment
+      (.scripture-reference). */
+.text-panel{ max-width:min(88vw, 68rem); }
+.text-body{
+  font-family:var(--font-editorial);
+  font-style:italic;
+  font-weight:500;
+  font-size:clamp(2.8rem, 5.4vw, 5.4rem);
+  line-height:1.26;
+  color:var(--cloud);
+  text-align:center;
+  text-shadow:0 2px 14px rgba(0,0,0,.35);
+  overflow-wrap:break-word;
 }
-#fg-layer[hidden], #text-layer[hidden]{ display:none; }
+.text-title{
+  font-family:var(--font-display);
+  font-weight:600;
+  font-size:clamp(1.5rem, 2.4vw, 2.4rem);
+  color:var(--sunrise-amber);
+  letter-spacing:.02em;
+  text-align:center;
+  text-shadow:0 2px 12px rgba(0,0,0,.35);
+}
+.text-title[hidden]{ display:none; }
 
+/* -- Media and camera: the panel grows so a photo or video reads big. It stays
+      comfortably inside the 16:9 stage (88vw × 84vh) so it can never spill. */
+.media-panel, .camera-panel{
+  width:min(92vw, 90rem);
+  max-width:96%;
+  height:min(88vh, 56rem);
+  max-height:92%;
+  padding:clamp(1rem, 2.2vh, 2rem);
+}
 .fg-media{
-  width:min(92vw, 88rem);
-  max-height:100%;
+  width:100%;
+  height:100%;
   display:flex;
   align-items:center;
   justify-content:center;
   border-radius:clamp(1rem, 1.8vw, 2rem);
   overflow:hidden;
-  box-shadow:0 40px 90px -30px var(--glass-shadow);
 }
-
 .fg-media img,
 .fg-media video{
   display:block;
   max-width:100%;
-  max-height:min(82vh, 46rem);
+  max-height:100%;
   width:auto;
   height:auto;
   object-fit:contain;
-  background:#000;
 }
+#camera-video{ width:100%; height:100%; object-fit:cover; }
 
 /* An audio file has nothing to show, so it gets a deliberate "now playing"
-   card rather than a bare player sitting on the background. */
+   card rather than a bare player sitting on the glass. */
 .fg-audio-card{
   display:flex;
   flex-direction:column;
   align-items:center;
   gap:clamp(1rem, 2.4vh, 2rem);
   padding:clamp(2rem, 5vh, 4rem) clamp(2.4rem, 6vw, 5rem);
-  border-radius:clamp(1.6rem, 2.4vw, 2.6rem);
-  background:linear-gradient(155deg, var(--glass-fill-strong), var(--glass-fill));
-  border:1px solid var(--glass-border);
-  backdrop-filter:blur(30px) saturate(170%);
-  -webkit-backdrop-filter:blur(30px) saturate(170%);
-  box-shadow:0 40px 90px -30px var(--glass-shadow), inset 0 1px 0 rgba(255,255,255,.22);
 }
 .fg-audio-card__mark{
   width:clamp(3rem, 5vw, 5rem);
@@ -522,7 +535,7 @@ button, input{ font-family:inherit; }
   font-family:var(--font-editorial);
   font-style:italic;
   font-weight:500;
-  font-size:clamp(1.1rem, 2vw, 2rem);
+  font-size:clamp(1.3rem, 2.4vw, 2.4rem);
   color:var(--cloud);
   text-align:center;
   max-width:40rem;
@@ -532,31 +545,14 @@ button, input{ font-family:inherit; }
   width:min(70vw, 44rem);
 }
 
-.fg-quote{
-  font-family:var(--font-editorial);
-  font-style:italic;
-  font-weight:500;
-  font-size:clamp(2.2rem, 4.6vw, 4.8rem);
-  line-height:1.22;
-  color:var(--cloud);
-  text-align:center;
-  max-width:min(88vw, 76rem);
-  overflow-wrap:break-word;
-  text-shadow:0 3px 22px rgba(0,0,0,.5), 0 0 60px rgba(255,194,75,.12);
-  transition:opacity .35s ease;
-}
-
-.fg-attribution{
-  margin:clamp(1rem, 2.6vh, 2.2rem) 0 0;
+.camera-status{
   font-family:var(--font-display);
-  font-weight:600;
-  font-size:clamp(1.1rem, 1.9vw, 1.9rem);
-  letter-spacing:.03em;
-  color:var(--sunrise-amber);
+  font-weight:500;
+  font-size:clamp(1rem, 1.6vw, 1.5rem);
+  color:var(--cloud-dim);
   text-align:center;
-  text-shadow:0 2px 12px rgba(0,0,0,.45);
 }
-.fg-attribution[hidden]{ display:none; }
+.camera-status[hidden]{ display:none; }
 
 /* The camera preview is mirrored so a speaker sees themselves as in a mirror;
    a plain webcam feed would otherwise feel backwards to them. */

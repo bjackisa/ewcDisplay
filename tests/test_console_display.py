@@ -136,11 +136,18 @@ def main():
             console.evaluate("document.activeElement && document.activeElement.blur()")
             console.keyboard.press("ArrowRight")
             console.wait_for_timeout(600)
-            check("ArrowRight silently advances the live verse",
+            check("ArrowRight moves the preview only, not the screen",
+                  "John 3:16" in lv("scripture-reference"), lv("scripture-reference"))
+            check("ArrowRight advanced the preview",
+                  "John 3:17" in pv("scripture-reference"), pv("scripture-reference"))
+            console.click("#launch-btn")
+            console.wait_for_timeout(700)
+            check("launching puts the stepped verse on the screen",
                   "John 3:17" in lv("scripture-reference"), lv("scripture-reference"))
             console.keyboard.press("ArrowLeft")
             console.wait_for_timeout(600)
-            check("ArrowLeft silently steps back", "John 3:16" in lv("scripture-reference"))
+            check("ArrowLeft moves the preview back",
+                  "John 3:16" in pv("scripture-reference"), pv("scripture-reference"))
 
             # ---------- lyrics ----------------------------------------------------
             console.click('button[data-mode="lyrics"]')
@@ -158,10 +165,13 @@ def main():
             check("first lyric line is active", idx() == 0, str(idx()))
             console.keyboard.press("ArrowDown")
             console.wait_for_timeout(600)
-            check("ArrowDown silently advances the live lyric", idx() == 1, str(idx()))
+            check("ArrowDown moves the preview only, not the screen", idx() == 0, str(idx()))
+            console.click("#launch-btn")
+            console.wait_for_timeout(700)
+            check("launching puts the stepped lyric on the screen", idx() == 1, str(idx()))
             console.keyboard.press("ArrowUp")
             console.wait_for_timeout(600)
-            check("ArrowUp silently steps back", idx() == 0, str(idx()))
+            check("ArrowUp leaves the screen on the launched line", idx() == 1, str(idx()))
 
             # ---------- console reload keeps driving -------------------------------
             console.reload(wait_until="load")

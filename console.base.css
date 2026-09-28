@@ -166,6 +166,48 @@ body.ui-visible .chrome{
 }
 .btn.primary:hover{ filter:brightness(1.06); }
 
+/* -- Mode fields: only the chosen panel's controls are shown --------------- */
+#mode-fields > div[hidden]{ display:none; }
+
+/* -- No Panel switch ------------------------------------------------------- */
+.switch{
+  display:flex;
+  align-items:center;
+  gap:.65rem;
+  padding:.55rem .7rem;
+  border-radius:.6rem;
+  border:1px solid var(--glass-border);
+  background:rgba(248,249,253,.06);
+  color:var(--cloud);
+  font-size:.83rem;
+  cursor:pointer;
+  text-align:left;
+  transition:background .2s ease, border-color .2s ease;
+}
+.switch:hover{ background:rgba(248,249,253,.12); }
+.switch__track{
+  flex:none;
+  position:relative;
+  width:2.4rem;
+  height:1.3rem;
+  border-radius:999px;
+  background:rgba(248,249,253,.18);
+  transition:background .2s ease;
+}
+.switch__thumb{
+  position:absolute;
+  top:.15rem; left:.15rem;
+  width:1rem; height:1rem;
+  border-radius:50%;
+  background:var(--cloud);
+  transition:transform .2s ease;
+}
+.switch.is-on{ border-color:var(--sunrise-amber); background:rgba(255,194,75,.14); }
+.switch.is-on .switch__track{
+  background:linear-gradient(135deg, var(--sunrise-orange), var(--sunrise-amber));
+}
+.switch.is-on .switch__thumb{ transform:translateX(1.1rem); }
+
 /* #done-btn sits as a direct child of the column-flex settings panel, so
    without this it inherits .btn's flex:1 and stretches to fill all
    remaining vertical space instead of sizing to its own content. */

@@ -14,11 +14,10 @@
      * LIVE — the last thing that was launched. The projection screen only
        ever shows this.
 
-   A third, deliberately narrower path is the "silent" one: stepping to the
-   next verse or lyric line while that item is already live updates the screen
-   straight away, since re-launching every line mid-song would be unusable.
-   Those controls call `pushLive` and skip the launch step; they are a no-op
-   for the screen if nothing is live yet.
+   The one exemption is editing the words of a song that is already live:
+   saving the edit updates the screen at once, because re-launching after every
+   correction mid-song would be unusable. Everything else — every panel mode,
+   every verse/line step, and "No Panel" — waits for Launch.
 
    State lives in three places, on purpose:
      * preview  — in this window (and mirrored into the iframe)
@@ -43,6 +42,8 @@
 
   var preview = {
     mode: 'timer',
+    /* "No Panel" removes the glass entirely. It is the only non-panel state. */
+    panelHidden: false,
     eventName: 'Sunday Service',
     targetISO: EWC.nextSunday9am().toISOString(),
     scriptureBookIndex: 0,
@@ -50,20 +51,13 @@
     scriptureVerse: 4,
     activeSongId: null,
     lyricLineIndex: 0,
-    /* What sits in the foreground, in place of the glass panel:
-         'panel'  the mode's own panel (scripture/lyrics/timer/clock)
-         'media'  a photo, video, GIF, audio file or the camera feed
-         'text'   a typed quote
-         'none'   nothing — just the background ("No Display") */
-    foreground: {
-      kind: 'panel',
-      media: null,                                   // {kind, mime, name} once set
-      text: { text: '', attribution: '' }
-    }
+    text: { body: '', title: '' },
+    media: null // {kind, mime, name} of the stored media to show, or null
   };
 
-  /** The last thing launched. `null` mode means nothing has been launched. */
-  var live = { mode: null, content: null };
+  /** The last thing launched. `null` mode means nothing has been launched.
+   *  `panelHidden` is the launched "No Panel" state. */
+  var live = { mode: null, content: null, panelHidden: false };
 
   var bibleData = null;
   var songs = [];
@@ -72,16 +66,10 @@
   var sessionId = 'session-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
 
   /** Serialised snapshot of what is on the screen, for comparing against the
-   *  preview to tell whether the operator has edited what was launched. The
-   *  foreground is part of the show, so it is part of the fingerprint too —
-   *  otherwise changing only the foreground would look like "still live".
-   *  When the foreground is not the panel, the panel's mode and content are
-   *  hidden on screen, so they are left out of the comparison. */
-  function fingerprint(mode, content) {
+   *  preview to tell whether the operator has edited what was launched. */
+  function fingerprint(mode, content, panelHidden) {
     if (mode === null) return '';
-    var fg = preview.foreground;
-    if (fg && fg.kind && fg.kind !== 'panel') return 'fg|' + JSON.stringify(fg);
-    return mode + '|' + JSON.stringify(content || null) + '|' + JSON.stringify(fg);
+    return mode + '|' + JSON.stringify(content || null) + '|' + (panelHidden ? 'nopanel' : 'panel');
   }
 
   /* ==========================================================================
@@ -100,17 +88,17 @@
 
     settingsPanel: document.getElementById('settings-panel'),
     modeToggleGroup: document.getElementById('mode-toggle-group'),
-    foregroundToggleGroup: document.getElementById('foreground-toggle-group'),
-    foregroundFields: document.getElementById('foreground-fields'),
-    fgMediaFields: document.getElementById('fg-media-fields'),
-    fgTextFields: document.getElementById('fg-text-fields'),
-    fgMediaBtn: document.getElementById('fg-media-btn'),
-    fgMediaInput: document.getElementById('fg-media-input'),
-    fgCameraBtn: document.getElementById('fg-camera-btn'),
-    fgMediaClearBtn: document.getElementById('fg-media-clear-btn'),
-    fgMediaStatus: document.getElementById('fg-media-status'),
-    fgTextInput: document.getElementById('fg-text-input'),
-    fgAttributionInput: document.getElementById('fg-attribution-input'),
+    modeFields: document.getElementById('mode-fields'),
+    modeFieldsNote: document.getElementById('mode-fields-note'),
+    noPanelToggle: document.getElementById('no-panel-toggle'),
+    textBodyInput: document.getElementById('text-body-input'),
+    textTitleInput: document.getElementById('text-title-input'),
+    mediaChooseBtn: document.getElementById('media-choose-btn'),
+    mediaFileInput: document.getElementById('media-file-input'),
+    mediaClearBtn: document.getElementById('media-clear-btn'),
+    mediaStatus: document.getElementById('media-status'),
+    cameraStopBtn: document.getElementById('camera-stop-btn'),
+    cameraStatusConsole: document.getElementById('camera-status-console'),
     eventNameInput: document.getElementById('event-name-input'),
     targetDatetimeInput: document.getElementById('target-datetime-input'),
     nextSundayBtn: document.getElementById('next-sunday-btn'),
@@ -152,6 +140,7 @@
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify({
         mode: preview.mode,
+        panelHidden: preview.panelHidden,
         eventName: preview.eventName,
         targetISO: preview.targetISO,
         scriptureBookIndex: preview.scriptureBookIndex,
@@ -159,7 +148,8 @@
         scriptureVerse: preview.scriptureVerse,
         activeSongId: preview.activeSongId,
         lyricLineIndex: preview.lyricLineIndex,
-        foreground: preview.foreground
+        text: preview.text,
+        media: preview.media
       }));
     } catch (err) {
       console.warn('Could not save settings:', err);
@@ -181,19 +171,10 @@
     if (mode === 'clock') return 'the clock';
     if (mode === 'scripture') return content.reference || 'scripture';
     if (mode === 'lyrics') return content.title ? 'lyrics — ' + content.title : 'lyrics';
+    if (mode === 'text') return 'the displayed text';
+    if (mode === 'media') return content.name ? 'media — ' + content.name : 'media';
+    if (mode === 'camera') return 'the camera feed';
     return mode;
-  }
-
-  /** Describes what is in the foreground, for the launch note. */
-  function describeForeground() {
-    var fg = preview.foreground;
-    if (fg.kind === 'media') {
-      if (fg.media && fg.media.kind === 'camera') return 'the camera feed';
-      return fg.media && fg.media.name ? fg.media.name : 'the selected media';
-    }
-    if (fg.kind === 'text') return 'the displayed text';
-    if (fg.kind === 'none') return 'no display (background only)';
-    return null;
   }
 
   /** Turns the preview state into the `content` payload the display applies. */
@@ -226,6 +207,9 @@
       }
       return { title: song.title, lines: song.lines, index: state.lyricLineIndex };
     }
+    if (state.mode === 'text') {
+      return { body: state.text.body, title: state.text.title };
+    }
     return {};
   }
 
@@ -236,10 +220,11 @@
       revision: revisionNumber,
       mode: state.mode,
       content: buildContent(state),
-      // The foreground descriptor rides on every push. For media it names the
-      // file but carries no bytes — the display reads those from the shared
-      // store, so a 200 MB video never crosses the bus.
-      foreground: state.foreground
+      panelHidden: state.panelHidden,
+      // The media descriptor rides on every push. It names the file but
+      // carries no bytes — the display reads those from the shared store, so a
+      // 200 MB video never crosses the bus.
+      media: state.mode === 'media' ? state.media : null
     };
   }
 
@@ -272,7 +257,8 @@
       revision: Date.now(),
       mode: preview.mode,
       content: buildContent(preview),
-      foreground: preview.foreground
+      panelHidden: preview.panelHidden,
+      media: preview.mode === 'media' ? preview.media : null
     });
   }
 
@@ -290,19 +276,25 @@
       el.previewNote.dataset.state = 'idle';
       return;
     }
+    if (live.panelHidden && !preview.panelHidden) {
+      el.previewNote.textContent = 'Not launched — “No Panel” is still on the screen.';
+      el.previewNote.dataset.state = 'idle';
+      return;
+    }
     if (live.mode !== preview.mode) {
       el.previewNote.textContent = 'Not launched — ' + describe(live.mode, live.content) + ' is still on the screen.';
       el.previewNote.dataset.state = 'idle';
       return;
     }
-    if (fingerprint(live.mode, live.content) !== fingerprint(preview.mode, buildContent(preview))) {
+    if (fingerprint(live.mode, live.content, live.panelHidden) !==
+        fingerprint(preview.mode, buildContent(preview), preview.panelHidden)) {
       el.previewNote.textContent = 'Preview edited — press Launch to put it on the screen.';
       el.previewNote.dataset.state = 'idle';
       return;
     }
-    var fgNote = describeForeground();
-    el.previewNote.textContent = 'Live on the church screen: ' + describe(live.mode, live.content) +
-      (fgNote ? ' · foreground: ' + fgNote : '') + '.';
+    el.previewNote.textContent = preview.panelHidden
+      ? 'Live on the church screen: no panel — the background only.'
+      : 'Live on the church screen: ' + describe(live.mode, live.content) + '.';
     el.previewNote.dataset.state = 'live';
   }
 
@@ -340,7 +332,7 @@
       // console), adopt it so the launch note tells the truth and a later
       // launch is not silently discarded as stale.
       if (first && message.mode && live.mode === null) {
-        live = { mode: message.mode, content: buildContent(preview) };
+        live = { mode: message.mode, content: buildContent(preview), panelHidden: false };
         revision = Math.max(revision, typeof message.revision === 'number' ? message.revision : 0);
         updateLaunchNote();
       }
@@ -374,7 +366,7 @@
 
   function pushLive(backgroundChanged) {
     revision += 1;
-    live = { mode: preview.mode, content: buildContent(preview) };
+    live = { mode: preview.mode, content: buildContent(preview), panelHidden: preview.panelHidden };
     var message = pushMessage(preview, revision);
     if (backgroundChanged) message.backgroundChanged = true;
     send(message);
@@ -392,12 +384,13 @@
   });
 
   /* ==========================================================================
-     8. SILENT LIVE CONTROLS
-     While scripture or lyrics are already live, stepping the line/verse goes
-     straight to the screen without a launch. If nothing is live (or a
-     different mode is live) this is a pure preview change.
+     8. STEPPING VERSE / LYRIC
+     The ‹ › buttons and the arrow keys move to the next verse or lyric line.
+     That is a preview move only: nothing reaches the church screen until
+     Launch is pressed, so the operator always sees the step first.
      ========================================================================== */
 
+  /** True when the named panel is the one currently on the screen. */
   function liveMatchesMode(mode) { return live.mode === mode; }
 
   function stepScripture(direction) {
@@ -428,9 +421,7 @@
     preview.scriptureChapter = chapter;
     preview.scriptureVerse = verse;
     renderScripture();
-    renderPreview();
-    if (liveMatchesMode('scripture')) pushLive(false); else updateLaunchNote();
-    savePersisted();
+    afterPreviewChange();
   }
 
   function stepLyric(direction) {
@@ -439,9 +430,7 @@
     var next = preview.lyricLineIndex + direction;
     if (next < 0 || next >= song.lines.length) return; // deliberately no wrap
     preview.lyricLineIndex = next;
-    renderPreview();
-    if (liveMatchesMode('lyrics')) pushLive(false); else updateLaunchNote();
-    savePersisted();
+    afterPreviewChange();
   }
 
   el.prevBtn.addEventListener('click', function () { stepFocused(-1); });
@@ -495,8 +484,7 @@
     clampScriptureReference();
     renderScripture();
     setScriptureStatus('');
-    renderPreview();
-    if (liveMatchesMode('scripture')) pushLive(false);
+    afterPreviewChange();
   }
 
   EWC.loadBibleData()
@@ -517,9 +505,7 @@
     preview.scriptureVerse = parseInt(el.scriptureVerseInput.value, 10) || 1;
     clampScriptureReference();
     renderScripture();
-    renderPreview();
-    if (liveMatchesMode('scripture')) pushLive(false);
-    savePersisted();
+    afterPreviewChange();
   });
 
   [el.scriptureChapterInput, el.scriptureVerseInput].forEach(function (input) {
@@ -679,8 +665,9 @@
 
     showSong(song.id);
     setMode('lyrics');
-    // If the edited song is the one already live, push the new lyrics to the
-    // screen so the edit is not stuck in the console.
+    // Exempted from the launch gate: editing the words of a song that is
+    // already live updates the screen at once. The operator is looking at the
+    // lyric they are fixing, so re-launching every correction is unusable.
     if (liveMatchesMode('lyrics')) pushLive(false);
   }
 
@@ -793,20 +780,24 @@
   }
 
   /* ==========================================================================
-     11b. FOREGROUND — media, typed text, or nothing
-     All three are live changes: like the backdrop photo, the foreground goes
-     straight to the screen without a launch, because there is nothing to
-     "review" — the operator is looking at the item they chose. Media bytes are
+     11b. PANEL CONTENT — text, media and camera
+     Every one of these is a panel mode like scripture or lyrics: choosing it
+     only updates the preview. Nothing reaches the church screen until Launch
+     is pressed, so the operator always reviews it first. Media bytes are
      copied into the shared IndexedDB store and only a descriptor is announced;
-     the display reads the bytes back. A camera feed is a live device stream,
-     so only the descriptor crosses — the display opens its own camera.
+     the display reads the bytes back. The camera is a live device stream on
+     the display side, so only the mode is announced.
      ========================================================================== */
 
-  var MAX_FG_BYTES = 512 * 1024 * 1024;
+  var MAX_MEDIA_BYTES = 512 * 1024 * 1024;
 
-  function setFgStatus(message) {
-    el.fgMediaStatus.textContent = message || '';
-    el.fgMediaStatus.style.display = message ? 'block' : 'none';
+  function setMediaStatus(message) {
+    el.mediaStatus.textContent = message || '';
+    el.mediaStatus.style.display = message ? 'block' : 'none';
+  }
+
+  function setCameraStatus(message) {
+    el.cameraStatusConsole.textContent = message || '';
   }
 
   /** Maps a file's MIME type to the display's own media kinds. */
@@ -817,90 +808,36 @@
     return null;
   }
 
-  /** Sends the current foreground to the screen and paints the preview. This
-   *  is a live change (like the backdrop), so it goes straight out. */
-  function applyForeground() {
-    pushLive(false);
-    savePersisted();
-  }
+  el.mediaChooseBtn.addEventListener('click', function () { el.mediaFileInput.click(); });
 
-  function setForegroundKind(kind) {
-    preview.foreground.kind = kind;
-    renderForegroundFields();
-    el.foregroundToggleGroup.querySelectorAll('button').forEach(function (btn) {
-      btn.classList.toggle('active', btn.dataset.fg === kind);
-    });
-    applyForeground();
-  }
-
-  /** Dims the field groups that the chosen foreground doesn't use. */
-  function renderForegroundFields() {
-    var kind = preview.foreground.kind;
-    el.fgMediaFields.style.opacity = kind === 'media' ? '1' : '.4';
-    el.fgTextFields.style.opacity = kind === 'text' ? '1' : '.4';
-  }
-
-  el.foregroundToggleGroup.addEventListener('click', function (e) {
-    var btn = e.target.closest('button[data-fg]');
-    if (btn) setForegroundKind(btn.dataset.fg);
-  });
-
-  el.fgMediaInput.addEventListener('change', function (e) {
+  el.mediaFileInput.addEventListener('change', function (e) {
     var file = e.target.files && e.target.files[0];
-    el.fgMediaInput.value = '';
+    el.mediaFileInput.value = '';
     if (!file) return;
     var kind = mediaKindFor(file);
-    if (!kind) { setFgStatus('That file type is not supported — choose an image, video or audio file.'); return; }
-    if (file.size > MAX_FG_BYTES) { setFgStatus('That file is too large to display.'); return; }
+    if (!kind) { setMediaStatus('That file type is not supported — choose an image, video or audio file.'); return; }
+    if (file.size > MAX_MEDIA_BYTES) { setMediaStatus('That file is too large to display.'); return; }
 
-    // Read the file as a Blob and hand the display the same record it will
-    // read back from the store, so a photo, GIF, video or audio all travel
-    // the one path.
     EWC.putForegroundMedia({ kind: kind, mime: file.type, name: file.name, blob: file })
       .then(function () {
-        preview.foreground.media = { kind: kind, mime: file.type, name: file.name };
-        setFgStatus('Showing ' + file.name + '.');
-        setForegroundKind('media');
+        preview.media = { kind: kind, mime: file.type, name: file.name };
+        setMediaStatus('Ready — press Launch to show ' + file.name + '.');
+        setMode('media'); // preview only; the screen changes on Launch
       })
       .catch(function (err) {
-        console.warn('Could not store the foreground media:', err);
-        setFgStatus('Could not store that file on this device.');
+        console.warn('Could not store the media:', err);
+        setMediaStatus('Could not store that file on this device.');
       });
   });
 
-  el.fgMediaBtn.addEventListener('click', function () { el.fgMediaInput.click(); });
-
-  el.fgCameraBtn.addEventListener('click', function () {
-    // No bytes to store: the display opens its own camera when it sees this.
+  el.mediaClearBtn.addEventListener('click', function () {
     EWC.putForegroundMedia(null).catch(function () {});
-    preview.foreground.media = { kind: 'camera', mime: '', name: 'Camera' };
-    setFgStatus('Camera requested — the display device will ask to use its camera.');
-    setForegroundKind('media');
+    preview.media = null;
+    setMediaStatus('Media removed.');
+    if (preview.mode === 'media') setMode('timer');
   });
 
-  el.fgMediaClearBtn.addEventListener('click', function () {
-    EWC.putForegroundMedia(null).catch(function () {});
-    preview.foreground.media = null;
-    setFgStatus('Foreground media removed.');
-    setForegroundKind('panel');
-  });
-
-  function readTextFields() {
-    preview.foreground.text = {
-      text: el.fgTextInput.value.trim(),
-      attribution: el.fgAttributionInput.value.trim()
-    };
-  }
-
-  el.fgTextInput.addEventListener('input', function () {
-    readTextFields();
-    if (preview.foreground.kind === 'text') applyForeground();
-  });
-
-  el.fgAttributionInput.addEventListener('input', function () {
-    readTextFields();
-    if (preview.foreground.kind === 'text') applyForeground();
-  });
+  el.cameraStopBtn.addEventListener('click', function () { setMode('timer'); });
 
   /* ==========================================================================
      12. MODE SWITCHING + TIMER FIELDS
@@ -909,13 +846,22 @@
   function setMode(mode) {
     preview.mode = mode;
 
-    document.getElementById('timer-fields').style.opacity = mode === 'timer' ? '1' : '.4';
-    document.getElementById('scripture-fields').style.opacity = mode === 'scripture' ? '1' : '.4';
-    document.getElementById('lyrics-fields').style.opacity = mode === 'lyrics' ? '1' : '.4';
+    // Only the chosen panel's own controls are shown — no hunting down a long
+    // rail for the fields that happen to matter right now.
+    ['timer', 'clock', 'scripture', 'lyrics', 'text', 'media', 'camera'].forEach(function (m) {
+      var group = document.getElementById(m + '-fields');
+      if (group) group.hidden = m !== mode;
+    });
 
     el.modeToggleGroup.querySelectorAll('button').forEach(function (btn) {
       btn.classList.toggle('active', btn.dataset.mode === mode);
     });
+
+    // Camera: nothing to store, but keep the operator honest about needing to
+    // launch it before it reaches the screen.
+    if (mode === 'camera') {
+      setCameraStatus('Camera panel selected — press Launch to open the display device’s camera.');
+    }
 
     afterPreviewChange();
   }
@@ -923,6 +869,30 @@
   el.modeToggleGroup.addEventListener('click', function (e) {
     var btn = e.target.closest('button[data-mode]');
     if (btn) setMode(btn.dataset.mode);
+  });
+
+  /** "No Panel" removes the glass entirely. It is a launch-gated change like
+   *  any panel mode. */
+  function setPanelHidden(hidden) {
+    preview.panelHidden = hidden;
+    el.noPanelToggle.classList.toggle('is-on', hidden);
+    el.noPanelToggle.setAttribute('aria-checked', hidden ? 'true' : 'false');
+    // With no panel there is nothing to configure, so the panel controls go.
+    el.modeFields.hidden = hidden;
+    el.modeFieldsNote.hidden = !hidden;
+    afterPreviewChange();
+  }
+
+  el.noPanelToggle.addEventListener('click', function () { setPanelHidden(!preview.panelHidden); });
+
+  el.textBodyInput.addEventListener('input', function () {
+    preview.text.body = el.textBodyInput.value.trim();
+    afterPreviewChange();
+  });
+
+  el.textTitleInput.addEventListener('input', function () {
+    preview.text.title = el.textTitleInput.value.trim();
+    afterPreviewChange();
   });
 
   el.eventNameInput.addEventListener('input', function (e) {
@@ -974,17 +944,15 @@
     el.scriptureVerseInput.value = preview.scriptureVerse;
     renderSongList();
 
-    // Foreground controls: reflect the restored foreground state.
-    el.fgTextInput.value = preview.foreground.text.text || '';
-    el.fgAttributionInput.value = preview.foreground.text.attribution || '';
-    el.foregroundToggleGroup.querySelectorAll('button').forEach(function (btn) {
-      btn.classList.toggle('active', btn.dataset.fg === preview.foreground.kind);
-    });
-    renderForegroundFields();
-    if (preview.foreground.media && preview.foreground.media.name) {
-      setFgStatus(preview.foreground.media.kind === 'camera'
-        ? 'Camera requested.'
-        : 'Showing ' + preview.foreground.media.name + '.');
+    // Panel controls: reflect the restored panel state.
+    el.textBodyInput.value = preview.text.body || '';
+    el.textTitleInput.value = preview.text.title || '';
+    el.noPanelToggle.classList.toggle('is-on', !!preview.panelHidden);
+    el.noPanelToggle.setAttribute('aria-checked', preview.panelHidden ? 'true' : 'false');
+    el.modeFields.hidden = !!preview.panelHidden;
+    el.modeFieldsNote.hidden = !preview.panelHidden;
+    if (preview.media && preview.media.name) {
+      setMediaStatus('Ready — press Launch to show ' + preview.media.name + '.');
     }
 
     // Paint the iframe. It may already be loaded when this runs (cache), in
@@ -996,6 +964,7 @@
     el.modeToggleGroup.querySelectorAll('button').forEach(function (btn) {
       btn.classList.toggle('active', btn.dataset.mode === preview.mode);
     });
+    setMode(preview.mode);
     updateLaunchNote();
     ping();
   }

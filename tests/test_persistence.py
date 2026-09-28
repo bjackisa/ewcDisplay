@@ -81,6 +81,8 @@ try:
         # Songs persist across a console reload.
         console.reload(wait_until="load")
         console.wait_for_timeout(2500)
+        console.click('button[data-mode="lyrics"]')
+        console.wait_for_timeout(300)
         console.fill("#song-title-input", "Great Is Thy Faithfulness")
         console.fill("#song-lyrics-input", "Great is thy faithfulness, O God my Father\nThere is no shadow of turning with thee")
         console.click("#song-save-btn")

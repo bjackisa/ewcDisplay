@@ -37,7 +37,9 @@ body{ cursor:none; }
     <span class="badge__name">Exploits Worship Centre<small>Live Service Display</small></span>
   </header>
 
-  <!-- Main display: timer, analog clock, scripture or lyrics -->
+  <!-- Main display: everything the operator can put on the glass panel.
+       One section per panel mode; the console picks the mode and whether the
+       panel itself is shown at all ("No Panel" leaves just the background). -->
   <main id="display">
 
     <section id="timer-view" class="panel">
@@ -65,20 +67,27 @@ body{ cursor:none; }
       <p class="lyrics-empty" id="lyrics-empty" hidden></p>
     </section>
 
+    <!-- Typed text, dressed exactly like the scripture panel: the body takes
+         the verse treatment, the title takes the reference treatment. -->
+    <section id="text-view" class="panel text-panel">
+      <p class="text-body" id="text-body"></p>
+      <p class="text-title" id="text-title" hidden></p>
+    </section>
+
+    <!-- Stored media: a photo, video, GIF or audio file, in an enlarged panel. -->
+    <section id="media-view" class="panel media-panel">
+      <div class="fg-media" id="media-mount"></div>
+    </section>
+
+    <!-- The display device's own camera, kept separate from stored media. -->
+    <section id="camera-view" class="panel camera-panel">
+      <div class="fg-media is-camera" id="camera-mount">
+        <video id="camera-video" autoplay muted playsinline class="is-mirrored"></video>
+      </div>
+      <p class="camera-status" id="camera-status" hidden></p>
+    </section>
+
   </main>
-
-  <!-- Foreground layer. Two independent things can sit over the background in
-       place of the glass panel: a media item (photo, video, GIF, audio file or
-       the device camera) and a typed quote. The console decides which — if any
-       — is live; with neither, the background shows on its own. -->
-  <div id="fg-layer" hidden>
-    <div class="fg-media" id="fg-media"></div>
-  </div>
-
-  <div id="text-layer" hidden>
-    <p class="fg-quote" id="fg-quote"></p>
-    <p class="fg-attribution" id="fg-attribution" hidden></p>
-  </div>
 
   <p class="micro-time" id="micro-time"></p>
 

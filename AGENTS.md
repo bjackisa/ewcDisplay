@@ -27,35 +27,45 @@ This is the core design; understand it before touching either page.
    there is exactly one renderer and the preview cannot disagree with launch.
 2. **Launch** (`#launch-btn` / <kbd>Space</kbd>) — posts a `push` message with
    the full state to the display. Only pushed state appears on the screen.
-3. **Silent live controls** — arrow keys step verses / lyric lines *without*
-   launching, but **only if that mode is already live**. Launching every line
-   mid-song is unusable, so these shortcuts deliberately skip the launch step.
+3. **One exemption** — saving an edit to a song that is **already live** pushes
+   straight away, because re-launching after every correction mid-song is
+   unusable. Everything else — every mode, every verse/line step, and
+   "No Panel" — waits for Launch.
 
 The countdown timer is a live change too: it re-renders each second on both
-screens so it stays accurate without being re-launched.
+screens so it stays accurate without being re-launched. The background photo is
+live as well (it is scenery, not content).
 
-## The foreground
+Arrow keys and the ‹ › buttons step verses / lyric lines, but that is a
+**preview-only** move now: the step has to be launched like anything else, so
+the operator always sees it before the congregation does.
 
-In front of the background there is a **foreground**, chosen on the console's
-`#foreground-toggle-group`. Exactly one of four states is live:
+## The panel
 
-| State | On screen |
+The console has a **mode picker** (`#mode-toggle-group`) naming what goes on
+the glass panel: timer, clock, scripture, lyrics, text, media, camera. Only the
+chosen mode's own fields are shown (`#mode-fields > div[data-mode]` are all
+present in the DOM; `setMode()` hides all but one), so the operator sees one
+mode's controls rather than every control at once. The picker itself is
+`position:sticky` at the top of the rail.
+
+| Mode | On screen |
 | --- | --- |
-| Panel | the mode's own glass panel (timer / clock / scripture / lyrics) |
-| Media | `#fg-layer` — a photo, video, GIF, audio file or the display's camera |
-| Text | `#text-layer` — a typed quote plus optional attribution |
-| No Display | neither — the background shows alone (body gets `.no-foreground`) |
-
-Media and text are **live changes** (like the backdrop): they go straight to
-the screen without a launch, because the operator is looking at the item they
-chose. The panel itself is launched as before.
+| Timer / Clock / Scripture / Lyrics | the mode's own glass panel |
+| Text | `#text-view` — a typed quote, dressed like scripture |
+| Media | `#media-view` — a photo, video, GIF or audio file |
+| Camera | `#camera-view` — the display device's own live feed |
+| No Panel (`#no-panel-toggle`) | the glass is removed; background alone (body gets `.no-panel`) |
 
 Media bytes are never sent over the bus. The console writes the file into the
 shared IndexedDB `foreground` store and pushes only a descriptor
-(`{kind, mime, name}`); the display reads the record back. A camera feed is
-the one exception: it is a live device stream, so the descriptor says
-`camera` and the display opens its own `getUserMedia`. The descriptor rides on
-every `push`, so it survives a console refresh.
+(`{kind, mime, name}`); the display reads the record back. The camera is a live
+device stream on the display side, so only the mode is announced. The media
+descriptor rides on every `push`, so it survives a console refresh.
+
+Text and media are *modes*, not a separate foreground layer: they render inside
+the same glass panel, so nothing competes with the background. The panel only
+disappears for "No Panel".
 
 ## File map
 
@@ -108,13 +118,21 @@ every `push`, so it survives a console refresh.
 - **The lyric track rebuilds on title *and* lines, not the title alone.** An
   edited song keeps its title but rewrites its lines, so keying the rebuild on
   the title left the old words on screen after an edit.
-- **`renderForeground()` must be idempotent.** It runs on every push, and a
-  silent verse/lyric step re-pushes the state; remounting the media on each
-  one would restart a playing video. It keys on the foreground descriptor and
-  only rebuilds when that changes.
+- **`applyMode()` must be idempotent.** It runs on every push, and a step
+  re-pushes the state; remounting the media on each one would restart a
+  playing video. It keys on the media descriptor and only rebuilds when that
+  changes.
+- **`applyLyricFocus()` must decide `is-tight` before it measures.** The tight
+  class shrinks every row, so measuring while it is applied lets the decision
+  feed back on itself: the shrunk row looks like it fits, the class comes off,
+  the row grows, and the track lands on a stale offset mid-oscillation. Remove
+  the class, measure, then re-read `offsetTop`/`offsetHeight` for the offset.
 - **Media bytes never ride the bus.** The console stores the file in IndexedDB
   and pushes a descriptor; the display reads it back. A camera feed is opened
   by the display itself with `getUserMedia`.
+- **Media mode is selectable with nothing chosen.** It shows the empty panel
+  rather than silently falling back to the timer, which would hide the media
+  picker the operator just asked for.
 
 ## Testing
 
@@ -125,11 +143,12 @@ driving real pages over a real `BroadcastChannel`:
 pip install playwright && playwright install chromium
 python3 tests/test_console_display.py   # the console/display split
 python3 tests/test_persistence.py       # backdrop + song persistence
-python3 tests/test_display_features.py  # type sizes + the foreground features
+python3 tests/test_display_features.py  # type sizes + the panel modes
 ```
 
 They cover: page errors, absence of controls on the display, launch vs preview
-behaviour, silent arrow-key stepping, revision handling across a console
-reload, a second display window, backdrop persistence across reloads, preview
-16:9 geometry, the enlarged lyrics/scripture/clock/timer type, and all four
-foreground states (media, text, No Display, plus editing a song's lyrics).
+behaviour, preview-only stepping, revision handling across a console reload, a
+second display window, backdrop persistence across reloads, preview 16:9
+geometry, the enlarged lyrics/scripture/clock/timer type, per-mode control
+visibility, and every panel mode (media, camera, text, No Panel, plus editing
+a song's lyrics).

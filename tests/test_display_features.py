@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Checks for the enlarged type and the four foreground features.
+"""Checks for the enlarged type and the on-panel media/text/camera features.
 
 Covers: bigger lyrics/scripture/clock/timer type with no overflow, the removal
-of the scripture quotation marks, foreground media (image, audio, camera),
-foreground text, "No Display", and editing a song's lyrics.
+of the scripture quotation marks, the text panel (dressed like scripture), the
+media panel (image, audio), the separate camera panel, the "No Panel" switch,
+and editing a song's lyrics. Every one of these is launch-gated: choosing it
+only changes the preview until Launch is pressed.
 """
 import pathlib
 import struct
@@ -77,12 +79,29 @@ def main():
             con.goto(f"{BASE}/console.html", wait_until="load")
             con.wait_for_timeout(8000)
 
+            # ---- only the chosen mode's controls are shown -------------------
+            def visible_groups():
+                return con.evaluate(
+                    "Array.from(document.querySelectorAll('#mode-fields > div'))"
+                    ".filter(function(d){return !d.hidden}).map(function(d){return d.id})")
+            for mode in ["timer", "clock", "scripture", "lyrics", "text", "media", "camera"]:
+                con.click('button[data-mode="%s"]' % mode)
+                con.wait_for_timeout(250)
+                check("only the %s controls are shown" % mode,
+                      visible_groups() == ["%s-fields" % mode], str(visible_groups()))
+            con.click("#no-panel-toggle")
+            con.wait_for_timeout(250)
+            check("No Panel hides the mode controls",
+                  con.evaluate("document.getElementById('mode-fields').hidden"))
+            con.click("#no-panel-toggle")
+            con.wait_for_timeout(250)
+
             # ---- scripture: bigger, and never spilling ----------------------
+            con.click('button[data-mode="scripture"]')  # shows the scripture fields
             con.select_option("#scripture-book-select", "42")  # John
             con.fill("#scripture-chapter-input", "3")
             con.fill("#scripture-verse-input", "16")
             con.click("#scripture-go-btn")
-            con.click('button[data-mode="scripture"]')
             con.click("#launch-btn")
             con.wait_for_timeout(1000)
             check("scripture text enlarged", fs(".scripture-text") >= 48, str(fs(".scripture-text")))
@@ -112,8 +131,8 @@ def main():
             con.wait_for_timeout(700)
             con.click("#launch-btn")
             con.wait_for_timeout(900)
-            check("lyric line font enlarged", fs(".lyric-line") >= 48, str(fs(".lyric-line")))
-            check("lyrics title enlarged", fs(".lyrics-title") >= 20, str(fs(".lyrics-title")))
+            check("lyric line font enlarged", fs(".lyric-line") >= 72, str(fs(".lyric-line")))
+            check("lyrics title enlarged", fs(".lyrics-title") >= 32, str(fs(".lyrics-title")))
             wrapped = disp.evaluate(
                 "document.querySelector('.lyric-line').scrollHeight > "
                 "parseFloat(getComputedStyle(document.querySelector('.lyric-line')).lineHeight)*1.4")
@@ -122,8 +141,8 @@ def main():
                 "(function(){var s=document.getElementById('lyrics-scrollport');"
                 "var a=document.querySelector('.lyric-line.is-active');"
                 "var sr=s.getBoundingClientRect(),ar=a.getBoundingClientRect();"
-                "return (ar.top<sr.top-1)||(ar.bottom>sr.bottom+1);})()")
-            check("the active lyric line is inside the scrollport", not clipped, str(clipped))
+                "return !((ar.top<sr.top-1)||(ar.bottom>sr.bottom+1));})()")
+            check("the active lyric line is inside the scrollport", clipped, str(clipped))
 
             # ---- clock and timer slightly larger -----------------------------
             con.click('button[data-mode="clock"]')
@@ -133,72 +152,119 @@ def main():
             check("clock frame enlarged",
                   float(disp.evaluate("parseFloat(getComputedStyle(document.querySelector('.clock-frame')).width)")) >= 430)
 
-            # ---- foreground media: image -------------------------------------
-            con.set_input_files("#fg-media-input", {
+            # ---- media panel: image, and it is launch-gated ------------------
+            con.set_input_files("#media-file-input", {
                 "name": "slide.png", "mimeType": "image/png", "buffer": png_bytes(10, 200, 90)})
             con.wait_for_timeout(1500)
-            check("media foreground is live immediately",
-                  disp.evaluate("document.getElementById('fg-layer').hidden === false"))
-            check("the image mounts on the screen",
-                  disp.evaluate("!!document.querySelector('#fg-media img')"))
-            check("the panel is hidden while media is foreground",
-                  disp.evaluate("getComputedStyle(document.getElementById('clock-view')).display") == "none")
+            check("choosing media only changes the preview",
+                  disp.evaluate("!document.querySelector('#media-mount img')"))
+            check("media is previewed in the iframe",
+                  con.evaluate("!!document.querySelector('#preview').contentWindow.document"
+                               ".querySelector('#media-mount img')"))
+            con.click("#launch-btn")
+            con.wait_for_timeout(1200)
+            check("the image mounts in the panel on the screen",
+                  disp.evaluate("!!document.querySelector('#media-mount img')"))
+            check("the media panel is enlarged",
+                  float(disp.evaluate("parseFloat(getComputedStyle(document.getElementById('media-view')).width)")) >= 1000)
             disp.reload(wait_until="load")
             disp.wait_for_timeout(2500)
-            check("foreground image survives a display reload",
-                  disp.evaluate("!!document.querySelector('#fg-media img')"))
+            check("the media panel survives a display reload",
+                  disp.evaluate("!!document.querySelector('#media-mount img')"))
 
-            # ---- foreground media: audio -------------------------------------
-            con.set_input_files("#fg-media-input", {
+            # ---- media panel: audio ------------------------------------------
+            con.set_input_files("#media-file-input", {
                 "name": "tune.wav", "mimeType": "audio/wav", "buffer": wav_bytes()})
-            con.wait_for_timeout(1500)
-            check("audio foreground mounts a player",
-                  disp.evaluate("!!document.querySelector('#fg-media audio')"))
+            con.wait_for_timeout(1200)
+            con.click("#launch-btn")
+            con.wait_for_timeout(1200)
+            check("audio mounts a player in the panel",
+                  disp.evaluate("!!document.querySelector('#media-mount audio')"))
 
-            # A silent lyric step must not restart the media.
-            disp.evaluate("document.querySelector('#fg-media audio').__marker='kept'")
+            # A step is preview-only, and re-launching the same media must not
+            # remount (and restart) it.
+            disp.evaluate("document.querySelector('#media-mount audio').__marker='kept'")
+            con.click("#launch-btn")
+            con.wait_for_timeout(700)
+            check("re-launching the same media does not remount it",
+                  disp.evaluate("document.querySelector('#media-mount audio').__marker") == "kept")
+
+            # ---- stepping is preview-only ------------------------------------
             con.click('button[data-mode="lyrics"]')
             con.wait_for_timeout(400)
             con.click("#launch-btn")
             con.wait_for_timeout(700)
+            live_line = disp.evaluate("document.querySelector('#lyrics-track .lyric-line.is-active').textContent")
             con.evaluate("document.activeElement && document.activeElement.blur()")
             con.keyboard.press("ArrowDown")
             con.wait_for_timeout(700)
-            check("a silent step does not remount the foreground media",
-                  disp.evaluate("document.querySelector('#fg-media audio').__marker") == "kept")
-
-            # ---- foreground media: camera ------------------------------------
-            con.click("#fg-camera-btn")
-            con.wait_for_timeout(2500)
-            check("camera foreground mounts a live video",
-                  disp.evaluate("!!document.querySelector('#fg-media video.is-mirrored')"))
-
-            # ---- foreground text ---------------------------------------------
-            con.fill("#fg-text-input", "The Lord is my shepherd; I shall not want.")
-            con.fill("#fg-attribution-input", "Psalm 23:1")
-            con.click("#foreground-toggle-group button[data-fg='text']")
-            con.wait_for_timeout(900)
-            check("the quote reaches the screen",
-                  "shepherd" in disp.evaluate("document.getElementById('fg-quote').textContent"))
-            check("the attribution reaches the screen",
-                  "Psalm 23:1" in disp.evaluate("document.getElementById('fg-attribution').textContent"))
-            check("the camera is released when leaving media",
-                  disp.evaluate("!document.querySelector('#fg-media video')"))
-
-            # ---- no display ---------------------------------------------------
-            con.click("#foreground-toggle-group button[data-fg='none']")
+            check("a step does not reach the screen",
+                  disp.evaluate("document.querySelector('#lyrics-track .lyric-line.is-active').textContent") == live_line)
+            check("a step still moves the preview",
+                  con.evaluate("!!document.querySelector('#preview').contentWindow.document"
+                               ".querySelector('#lyrics-track .lyric-line.is-active')"))
+            con.click("#launch-btn")
             con.wait_for_timeout(700)
-            check("No Display hides every panel",
+            check("launching after a step puts the new line on the screen",
+                  disp.evaluate("document.querySelector('#lyrics-track .lyric-line.is-active').textContent") != live_line)
+
+            # ---- camera panel, separate from media ---------------------------
+            con.click('button[data-mode="camera"]')
+            con.wait_for_timeout(400)
+            check("camera is its own mode, not media",
+                  con.evaluate("document.querySelector('button[data-mode=\\'camera\\']').classList.contains('active')"))
+            con.click("#launch-btn")
+            con.wait_for_timeout(2500)
+            check("camera panel mounts a live video",
+                  disp.evaluate("!!document.querySelector('#camera-video') && "
+                                "!!document.getElementById('camera-video').srcObject"))
+            check("the camera panel is enlarged",
+                  float(disp.evaluate("parseFloat(getComputedStyle(document.getElementById('camera-view')).width)")) >= 1000)
+            con.click('button[data-mode="timer"]')
+            con.click("#launch-btn")
+            con.wait_for_timeout(1200)
+            check("leaving the camera stops the stream",
+                  disp.evaluate("!document.getElementById('camera-video').srcObject"))
+
+            # ---- text panel, dressed like scripture --------------------------
+            con.click('button[data-mode="text"]')
+            con.wait_for_timeout(400)
+            check("text is launch-gated too",
+                  disp.evaluate("!document.getElementById('text-body').textContent"))
+            con.fill("#text-body-input", "The Lord is my shepherd; I shall not want.")
+            con.fill("#text-title-input", "Psalm 23:1")
+            con.click("#launch-btn")
+            con.wait_for_timeout(900)
+            check("the text body reaches the screen",
+                  "shepherd" in disp.evaluate("document.getElementById('text-body').textContent"))
+            check("the text title reaches the screen",
+                  "Psalm 23:1" in disp.evaluate("document.getElementById('text-title').textContent"))
+            check("the text body is styled like scripture",
+                  disp.evaluate("getComputedStyle(document.getElementById('text-body')).fontFamily") ==
+                  disp.evaluate("getComputedStyle(document.getElementById('scripture-text')).fontFamily"))
+            check("the text title is styled like the scripture reference",
+                  disp.evaluate("getComputedStyle(document.getElementById('text-title')).fontFamily") ==
+                  disp.evaluate("getComputedStyle(document.getElementById('scripture-reference')).fontFamily"))
+
+            # ---- No Panel -----------------------------------------------------
+            con.click("#no-panel-toggle")
+            con.wait_for_timeout(400)
+            check("No Panel is launch-gated",
+                  disp.evaluate("getComputedStyle(document.getElementById('display')).display") != "none")
+            con.click("#launch-btn")
+            con.wait_for_timeout(700)
+            check("No Panel hides every panel",
                   disp.evaluate("getComputedStyle(document.getElementById('display')).display") == "none")
-            check("No Display leaves the background visible",
+            check("No Panel leaves the background visible",
                   disp.evaluate("getComputedStyle(document.getElementById('bg-layer')).display") != "none")
             disp.reload(wait_until="load")
             disp.wait_for_timeout(2500)
-            check("No Display survives a display reload",
-                  disp.evaluate("document.body.classList.contains('no-foreground')"))
-            con.click("#foreground-toggle-group button[data-fg='panel']")
+            check("No Panel survives a display reload",
+                  disp.evaluate("document.body.classList.contains('no-panel')"))
+            con.click("#no-panel-toggle")
+            con.click("#launch-btn")
             con.wait_for_timeout(700)
-            check("returning to Panel shows a panel again",
+            check("returning shows a panel again",
                   disp.evaluate("getComputedStyle(document.getElementById('display')).display") != "none")
 
             # ---- edit song lyrics ---------------------------------------------

@@ -27,18 +27,25 @@ This is the core design; understand it before touching either page.
    there is exactly one renderer and the preview cannot disagree with launch.
 2. **Launch** (`#launch-btn` / <kbd>Space</kbd>) — posts a `push` message with
    the full state to the display. Only pushed state appears on the screen.
-3. **One exemption** — saving an edit to a song that is **already live** pushes
-   straight away, because re-launching after every correction mid-song is
-   unusable. Everything else — every mode, every verse/line step, and
-   "No Panel" — waits for Launch.
+3. **Two exemptions** — changes that follow along on an *already-live* panel,
+   because re-launching each time would be unusable:
+   - **stepping** a verse (← / →) or a lyric line (↑ / ↓) while that panel is
+     on the screen. The verse/line being moved off is already up there, so the
+     screen moves with the preview; the launch note stays "live".
+   - **saving an edit** to a song that is already live (mid-song corrections).
+
+   Both exemptions require the preview to be *exactly* what is live
+   (`previewIsLive()` compares fingerprints). Choosing a **new** item — a
+   different book/chapter, a different song from the list — is not a step, so
+   it stays launch-gated. A step on a preview that has already drifted (a new
+   reference picked but not launched) also waits for Launch.
+
+   Everything else — every mode, every new item, and "No Panel" — waits for
+   Launch.
 
 The countdown timer is a live change too: it re-renders each second on both
 screens so it stays accurate without being re-launched. The background photo is
 live as well (it is scenery, not content).
-
-Arrow keys and the ‹ › buttons step verses / lyric lines, but that is a
-**preview-only** move now: the step has to be launched like anything else, so
-the operator always sees it before the congregation does.
 
 ## The panel
 
@@ -68,6 +75,19 @@ shared IndexedDB `foreground` store and pushes only a descriptor
 (`{kind, mime, name}`); the display reads the record back. The camera is a live
 device stream on the display side, so only the mode is announced. The media
 descriptor rides on every `push`, so it survives a console refresh.
+
+**Camera choice.** A machine can have several cameras, so the console lists
+them (`enumerateDevices`, filtered to `videoinput`) in `#camera-device-select`
+and pushes only the chosen `cameraDeviceId`. Exactly one camera is adopted
+silently; with several, none is chosen until the operator picks one (a blank
+option means "let the display decide"). Real hardware only reveals device names
+once permission is granted, so opening Camera mode asks once
+(`primeCameraNames`) then re-lists — a single prompt, not one per launch. The
+display opens `deviceId:{exact}` and falls back to the default if that camera
+is gone (`OverconstrainedError`). Changing the camera is live while the feed is
+on screen; the display reopens only when the device changes, never on a silent
+re-push. `cameraDeviceId` also rides on every `push`, so a display reload
+reopens the right camera.
 
 Text and media are *modes*, not a separate foreground layer: they render inside
 the same glass panel, so nothing competes with the background. The panel only
@@ -127,7 +147,23 @@ disappears for "No Panel".
 - **`applyMode()` must be idempotent.** It runs on every push, and a step
   re-pushes the state; remounting the media on each one would restart a
   playing video. It keys on the media descriptor and only rebuilds when that
-  changes.
+  changes — and the camera likewise keys on `cameraDeviceId`, so only a real
+  device switch reopens the feed.
+- **A step goes live only when the preview *is* the live view.** The step
+  functions snapshot `previewIsLive()` *before* mutating, then `pushLive` after.
+  Checking after the mutation, or keying only on `live.mode === mode`, would
+  blast a new-but-unlaunched book/song to the screen the moment an arrow was
+  pressed.
+- **The scripture/text panel must cap its own height (`max-height:88%`) or the
+  fitter has nothing to fit.** A centred flex panel with no height limit simply
+  grows to the content and pushes its top and bottom off the 16:9 stage; the
+  fitter reads `container.clientHeight`, so it needs a bounded box to measure
+  against. `fitToPanel()` measures the panel's *content box* (minus padding and
+  any sibling reference/title line) and binary-searches the largest font that
+  fits, with `overflow:hidden` as the final backstop.
+- **`.text-body`/`.scripture-text` need `min-width:0` + `overflow-wrap:anywhere`.**
+  As flex items their min-content width is the longest word, so without both a
+  stray long token widens the panel past the stage instead of wrapping.
 - **`applyLyricFocus()` must decide `is-tight` before it measures.** The tight
   class shrinks every row, so measuring while it is applied lets the decision
   feed back on itself: the shrunk row looks like it fits, the class comes off,
@@ -165,8 +201,10 @@ python3 tests/test_display_features.py  # type sizes + the panel modes
 ```
 
 They cover: page errors, absence of controls on the display, launch vs preview
-behaviour, preview-only stepping, revision handling across a console reload, a
-second display window, backdrop persistence across reloads, preview 16:9
-geometry, the enlarged lyrics/scripture/clock/timer type, per-mode control
-visibility, and every panel mode (media, camera, text, No Panel, plus editing
-a song's lyrics).
+behaviour, live stepping (and the launch-gated new-book/new-song and
+drifted-preview cases), revision handling across a console reload, a second
+display window, backdrop persistence across reloads, preview 16:9 geometry,
+the enlarged lyrics/scripture/clock/timer type, scripture/text never spilling
+off the stage, per-mode control visibility, the camera picker (single camera
+auto-selected, several cameras offered, the chosen id sent to the display), and
+every panel mode (media, camera, text, No Panel, plus editing a song's lyrics).

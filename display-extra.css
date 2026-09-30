@@ -39,8 +39,10 @@ body.is-preview #stage{
 }
 
 /* A long verse is shrunk by display.js rather than being allowed to run off
-   the bottom of the panel, but leave the copy a generous measure so a verse
-   that *can* fit at a readable size does. */
+   the panel, but leave the copy a generous measure so a verse that *can* fit
+   at a readable size does. The width is a cap, not a fixed size: a short verse
+   stays centred in the glass, a long one stretches sideways up to this
+   measure and then wraps. */
 .scripture-text{ max-width:min(82vw, 60rem); }
 
 /* When the focused lyric is tall enough to overflow the scrollport (a long

@@ -90,7 +90,7 @@
           </div>
           <input type="file" id="scripture-file-input" accept="application/json,.json">
           <p class="hint" id="scripture-status" style="margin-top:.6rem;">Loading Bible…</p>
-          <p class="hint">Review a verse here, then Launch it. The ← and → keys (or the ‹ › buttons above the preview) step through verses in the preview.</p>
+          <p class="hint">Review a verse here, then Launch it. Once it is live, the ← and → keys (or the ‹ › buttons above the preview) step straight to the next verse on the screen — no relaunch. Picking a different book or chapter still waits for Launch.</p>
         </div>
 
         <div id="lyrics-fields" hidden>
@@ -120,7 +120,7 @@
               <p class="hint" id="song-status" style="margin-top:.6rem;"></p>
             </div>
           </div>
-          <p class="hint">Songs are saved on this device. The ↑ and ↓ keys (or the ‹ › buttons above the preview) move a line in the preview. Editing a song that is already live updates the screen as you save.</p>
+          <p class="hint">Songs are saved on this device. Once a song is live, the ↑ and ↓ keys (or the ‹ › buttons above the preview) move the current line on the screen — no relaunch. Picking a different song still waits for Launch, and editing a song that is already live updates the screen as you save.</p>
         </div>
 
         <div id="text-fields" hidden>
@@ -146,11 +146,18 @@
         </div>
 
         <div id="camera-fields" hidden>
-          <div class="file-row">
+          <div class="field">
+            <label for="camera-device-select">Camera</label>
+            <select id="camera-device-select" disabled>
+              <option>Looking for cameras…</option>
+            </select>
+            <p class="hint" id="camera-device-hint">Launching the Camera opens it on the display device itself.</p>
+          </div>
+          <div class="file-row" style="margin-top:.8rem;">
             <button class="btn" id="camera-stop-btn">Back to timer panel</button>
           </div>
           <p class="hint" id="camera-status-console"></p>
-          <p class="hint">Launching the Camera opens the camera on the display device itself. Launching any other panel stops it. The panel grows to fit the feed.</p>
+          <p class="hint">Launching the Camera opens the chosen camera on the display device itself. Switching camera reopens the feed live; launching any other panel stops it. The panel grows to fit the feed.</p>
         </div>
 
       </div>
@@ -184,8 +191,9 @@
 
       <p class="hint" id="shortcut-hint">
         Shortcuts: <b>→</b>/<b>←</b> step verses, <b>↓</b>/<b>↑</b> step lyric lines,
-        <b>Ctrl/⌘+Enter</b> saves a song, <b>Space</b> launches. Nothing reaches
-        the screen until you launch it — review every change in the preview first.
+        <b>Ctrl/⌘+Enter</b> saves a song, <b>Space</b> launches. A verse or lyric
+        step goes live at once once that panel is already on the screen; every
+        other change — a new book, chapter or song, a new mode — waits for Launch.
       </p>
 
     </aside>

@@ -86,6 +86,9 @@
     lyrics: { title: 'Lyrics', lines: null, index: 0, emptyMessage: '' },
     text: { body: '', title: '' },
     media: null, // {kind, mime, name} of the stored media to show, or null
+    /* Which physical camera to open. The console owns the picker and sends the
+       chosen deviceId; null means "whatever the browser considers default". */
+    cameraDeviceId: null,
     hasCustomBg: false
   };
 
@@ -377,20 +380,50 @@
     fitToPanel(el.textBody, el.textView);
   }
 
-  /** Reduces a node's font-size until it fits its container's height, never
-   *  below 40% of the size CSS gave it. */
+  /** Reduces a node's font-size until it fits the *panel's own content box*,
+   *  never below ~25% of the size CSS gave it (and never under 14px). Width is
+   *  left to CSS (the panel caps its own width and long words break), so the
+   *  text stretches sideways and only the height has to be traded down — a long
+   *  verse can never run off the top or bottom of the projection. Past the
+   *  floor the panel's own overflow:hidden keeps any remainder inside the glass
+   *  rather than on the stage edges. */
   function fitToPanel(node, container) {
     node.style.fontSize = '';
     var base = parseFloat(getComputedStyle(node).fontSize) || 32;
-    var available = container.clientHeight;
-    if (!available) return;
 
-    var size = base;
-    var guard = 0;
-    while (node.scrollHeight > available && size > base * 0.4 && guard++ < 60) {
-      size -= 1;
-      node.style.fontSize = size + 'px';
+    // Measure against the panel's inner box, not its border box: the panel has
+    // generous padding and a reference/title line below the body, and counting
+    // either as available space lets the last line spill out of the glass.
+    var cs = getComputedStyle(container);
+    var contentHeight = container.clientHeight
+      - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    if (!contentHeight) return;
+
+    var visible = [];
+    for (var i = 0; i < container.children.length; i++) {
+      if (container.children[i].offsetHeight) visible.push(container.children[i]);
     }
+    var siblingsHeight = 0;
+    visible.forEach(function (child) {
+      if (child !== node) siblingsHeight += child.offsetHeight;
+    });
+    var gap = parseFloat(cs.rowGap) || 0;
+    var available = contentHeight - siblingsHeight - gap * Math.max(0, visible.length - 1);
+    if (available <= 0) return;
+
+    if (node.scrollHeight <= available) return; // already fits at its CSS size
+
+    // Binary-search the largest size that fits, rather than stepping down a
+    // pixel at a time — each probe forces a reflow, and the longest verses can
+    // need tens of them.
+    var lo = Math.max(base * 0.25, 14);
+    var hi = base;
+    for (var step = 0; step < 22 && hi - lo > 0.5; step++) {
+      var mid = (lo + hi) / 2;
+      node.style.fontSize = mid + 'px';
+      if (node.scrollHeight > available) hi = mid; else lo = mid;
+    }
+    node.style.fontSize = lo + 'px';
   }
 
   /* ==========================================================================
@@ -636,7 +669,10 @@
     }).catch(function (err) { console.warn('Could not read the panel media:', err); });
   }
 
-  /** Opens the device camera as a mirrored live feed. */
+  /** Opens the device camera as a mirrored live feed. The console names which
+   *  physical camera via state.cameraDeviceId; when it names one that is gone
+   *  (unplugged since the picker was read) this falls back to the browser's own
+   *  default rather than showing a dead panel. */
   function renderCamera() {
     teardownCamera();
     var token = ++cameraToken;
@@ -645,7 +681,18 @@
       el.cameraStatus.hidden = false;
       return;
     }
-    navigator.mediaDevices.getUserMedia({ video: true, audio: false }).then(function (stream) {
+
+    function open(constraints) {
+      return navigator.mediaDevices.getUserMedia({ video: constraints, audio: false });
+    }
+
+    // The browser rejects a stale deviceId with OverconstrainedError, so try
+    // the chosen camera first and quietly retry the default if it has gone.
+    var request = state.cameraDeviceId
+      ? open({ deviceId: { exact: state.cameraDeviceId } }).catch(function () { return open(true); })
+      : open(true);
+
+    request.then(function (stream) {
       if (token !== cameraToken) { // panel moved on while we waited
         stream.getTracks().forEach(function (track) { track.stop(); });
         return;
@@ -678,6 +725,7 @@
   }
 
   var appliedMediaKey = null;
+  var appliedCameraKey = null;
   var cameraOpen = false;
 
   /** Shows the panel the mode names, and applies "No Panel". Runs on every
@@ -704,9 +752,14 @@
       teardownMedia();
     }
 
+    // The camera is a live device stream, so it is only reopened when the
+    // panel enters camera mode or the operator picks a different camera —
+    // never on the silent re-pushes a verse step makes.
     var wantCamera = mode === 'camera' && shown;
-    if (wantCamera && !cameraOpen) renderCamera();
+    var cameraKey = wantCamera ? (state.cameraDeviceId || '') : null;
+    if (wantCamera && (!cameraOpen || cameraKey !== appliedCameraKey)) renderCamera();
     else if (!wantCamera && cameraOpen) teardownCamera();
+    appliedCameraKey = cameraKey;
     cameraOpen = wantCamera;
 
     // "No Panel" is the one thing that removes the glass altogether.
@@ -722,7 +775,8 @@
         mode: state.mode,
         panelHidden: state.panelHidden,
         media: state.media,
-        text: state.text
+        text: state.text,
+        cameraDeviceId: state.cameraDeviceId
       }));
     } catch (err) {}
   }
@@ -735,6 +789,7 @@
     state.panelHidden = !!saved.panelHidden;
     if (saved.media) state.media = saved.media;
     if (saved.text) state.text = saved.text;
+    if (saved.cameraDeviceId) state.cameraDeviceId = saved.cameraDeviceId;
     // A remembered camera cannot be opened without a console to ask for it.
     if (state.mode === 'camera') { state.mode = 'timer'; }
     applyMode();
@@ -835,6 +890,8 @@
     // The media descriptor rides on every push, so it survives a console
     // refresh. Without one, keep whatever is already showing.
     if (message.media !== undefined) state.media = message.media || null;
+    // Same for the chosen camera, so a display reload reopens the right one.
+    if (message.cameraDeviceId !== undefined) state.cameraDeviceId = message.cameraDeviceId || null;
 
     rememberPanel();
     applyMode();

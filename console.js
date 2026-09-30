@@ -14,10 +14,15 @@
      * LIVE — the last thing that was launched. The projection screen only
        ever shows this.
 
-   The one exemption is editing the words of a song that is already live:
-   saving the edit updates the screen at once, because re-launching after every
-   correction mid-song would be unusable. Everything else — every panel mode,
-   every verse/line step, and "No Panel" — waits for Launch.
+   Two exemptions let an already-live panel follow along without a relaunch:
+
+     * stepping a verse or a lyric line while that panel is on the screen — the
+       verse/line being moved off is already up there, so re-launching after
+       every line would be unusable; and
+     * editing the words of a song that is already live, for the same reason.
+
+   Everything else — every panel mode, choosing a *new* book/chapter/song, and
+   "No Panel" — waits for Launch.
 
    State lives in three places, on purpose:
      * preview  — in this window (and mirrored into the iframe)
@@ -52,7 +57,11 @@
     activeSongId: null,
     lyricLineIndex: 0,
     text: { body: '', title: '' },
-    media: null // {kind, mime, name} of the stored media to show, or null
+    media: null, // {kind, mime, name} of the stored media to show, or null
+    /* Which physical camera to open, by deviceId. Null means "let the display
+       choose" — which is the right thing when the machine has one camera, or
+       when the list has not been read yet. */
+    cameraDeviceId: null
   };
 
   /** The last thing launched. `null` mode means nothing has been launched.
@@ -99,6 +108,8 @@
     mediaStatus: document.getElementById('media-status'),
     cameraStopBtn: document.getElementById('camera-stop-btn'),
     cameraStatusConsole: document.getElementById('camera-status-console'),
+    cameraDeviceSelect: document.getElementById('camera-device-select'),
+    cameraDeviceHint: document.getElementById('camera-device-hint'),
     eventNameInput: document.getElementById('event-name-input'),
     targetDatetimeInput: document.getElementById('target-datetime-input'),
     nextSundayBtn: document.getElementById('next-sunday-btn'),
@@ -149,7 +160,8 @@
         activeSongId: preview.activeSongId,
         lyricLineIndex: preview.lyricLineIndex,
         text: preview.text,
-        media: preview.media
+        media: preview.media,
+        cameraDeviceId: preview.cameraDeviceId
       }));
     } catch (err) {
       console.warn('Could not save settings:', err);
@@ -224,7 +236,10 @@
       // The media descriptor rides on every push. It names the file but
       // carries no bytes — the display reads those from the shared store, so a
       // 200 MB video never crosses the bus.
-      media: state.mode === 'media' ? state.media : null
+      media: state.mode === 'media' ? state.media : null,
+      // Which camera to open, by deviceId. Only a string crosses the bus; the
+      // display opens the device itself. Null lets the display pick its own.
+      cameraDeviceId: state.mode === 'camera' ? (state.cameraDeviceId || null) : null
     };
   }
 
@@ -258,7 +273,8 @@
       mode: preview.mode,
       content: buildContent(preview),
       panelHidden: preview.panelHidden,
-      media: preview.mode === 'media' ? preview.media : null
+      media: preview.mode === 'media' ? preview.media : null,
+      cameraDeviceId: preview.mode === 'camera' ? (preview.cameraDeviceId || null) : null
     });
   }
 
@@ -386,15 +402,40 @@
   /* ==========================================================================
      8. STEPPING VERSE / LYRIC
      The ‹ › buttons and the arrow keys move to the next verse or lyric line.
-     That is a preview move only: nothing reaches the church screen until
-     Launch is pressed, so the operator always sees the step first.
+
+     Stepping is a *live* move once that panel is already on the screen: the
+     verse or line the operator is moving off is already up there, and the
+     congregation should follow along without the operator re-launching after
+     every line. Choosing a *new* item — a different book or chapter from the
+     picker, a different song from the list — is not a step, so it stays
+     launch-gated like everything else.
      ========================================================================== */
 
   /** True when the named panel is the one currently on the screen. */
   function liveMatchesMode(mode) { return live.mode === mode; }
 
+  /** True when the preview *right now* is exactly what is on the screen. A step
+   *  only goes live in that case: the verse/line being moved off is the one the
+   *  congregation is looking at. If the operator has already picked a new
+   *  book/chapter or a new song, the preview has drifted, so stepping it must
+   *  still wait for Launch like any other new content. */
+  function previewIsLive(mode) {
+    return liveMatchesMode(mode) &&
+      fingerprint(live.mode, live.content, live.panelHidden) ===
+      fingerprint(preview.mode, buildContent(preview), preview.panelHidden);
+  }
+
+  /** Applies a step. `wasLive` says whether the preview was the live view
+   *  *before* the step — if so the screen moves with it, otherwise the step
+   *  waits for Launch like any other edit. */
+  function commitStep(wasLive) {
+    afterPreviewChange();       // preview, saved state, launch note
+    if (wasLive) pushLive(false); // was already on screen → step it too
+  }
+
   function stepScripture(direction) {
     if (!bibleData) return;
+    var wasLive = previewIsLive('scripture');
     var bookIndex = preview.scriptureBookIndex;
     var chapter = preview.scriptureChapter;
     var verse = preview.scriptureVerse;
@@ -421,7 +462,7 @@
     preview.scriptureChapter = chapter;
     preview.scriptureVerse = verse;
     renderScripture();
-    afterPreviewChange();
+    commitStep(wasLive);
   }
 
   function stepLyric(direction) {
@@ -429,8 +470,9 @@
     if (!song) return;
     var next = preview.lyricLineIndex + direction;
     if (next < 0 || next >= song.lines.length) return; // deliberately no wrap
+    var wasLive = previewIsLive('lyrics');
     preview.lyricLineIndex = next;
-    afterPreviewChange();
+    commitStep(wasLive);
   }
 
   el.prevBtn.addEventListener('click', function () { stepFocused(-1); });
@@ -837,6 +879,135 @@
     if (preview.mode === 'media') setMode('timer');
   });
 
+  /* --------------------------------------------------------------------------
+     Camera picker
+
+     A machine can have several cameras (a built-in webcam, a USB capture card,
+     an HDMI feed). The console lists them and sends only the chosen deviceId;
+     the display opens that device. With exactly one camera there is nothing to
+     choose, so it is selected silently; with several, none is chosen until the
+     operator picks one, rather than quietly defaulting to the first.
+
+     Real hardware only reveals device names (and stable ids) once camera
+     permission has been granted, so entering Camera mode asks for it once — a
+     single prompt, not one per launch — then re-lists with proper names.
+     -------------------------------------------------------------------------- */
+
+  var cameraDevices = [];
+
+  /** Describes a camera for the picker; falls back to a positional label when
+   *  the browser has not revealed the real name (no permission yet). */
+  function cameraLabel(device, index) {
+    return device.label || 'Camera ' + (index + 1);
+  }
+
+  function setCameraDeviceHint(message) {
+    el.cameraDeviceHint.textContent = message;
+  }
+
+  /** Fills the picker from the current camera list, preserving the operator's
+   *  choice where the device is still present. */
+  function renderCameraOptions() {
+    var select = el.cameraDeviceSelect;
+    select.innerHTML = '';
+
+    if (!cameraDevices.length) {
+      var none = document.createElement('option');
+      none.value = '';
+      none.textContent = 'No camera found';
+      select.appendChild(none);
+      select.disabled = true;
+      setCameraDeviceHint('No camera was found on this device. Plug one in and re-open the Camera panel.');
+      return;
+    }
+
+    if (cameraDevices.length === 1) {
+      // Nothing to choose: adopt the only camera so the display opens it.
+      var only = cameraDevices[0];
+      preview.cameraDeviceId = only.deviceId || null;
+      var onlyOption = document.createElement('option');
+      onlyOption.value = only.deviceId || '';
+      onlyOption.textContent = cameraLabel(only, 0);
+      select.appendChild(onlyOption);
+      select.disabled = true;
+      setCameraDeviceHint('One camera found — it will be used automatically.');
+      return;
+    }
+
+    // Several cameras: offer a blank default plus each device. A blank value
+    // means "let the display decide", which is the honest starting point.
+    var auto = document.createElement('option');
+    auto.value = '';
+    auto.textContent = 'Default camera';
+    select.appendChild(auto);
+
+    cameraDevices.forEach(function (device, i) {
+      var option = document.createElement('option');
+      option.value = device.deviceId || '';
+      option.textContent = cameraLabel(device, i);
+      select.appendChild(option);
+    });
+
+    // Keep the operator's choice if that camera is still connected.
+    var stillThere = cameraDevices.some(function (d) { return d.deviceId === preview.cameraDeviceId; });
+    if (!stillThere) preview.cameraDeviceId = null;
+    select.value = preview.cameraDeviceId || '';
+    select.disabled = false;
+    setCameraDeviceHint(cameraDevices.length + ' cameras found — choose the one to show, then Launch.');
+  }
+
+  /** Reads the connected cameras and refreshes the picker. */
+  function refreshCameras() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+      el.cameraDeviceSelect.innerHTML = '<option>Camera not available</option>';
+      el.cameraDeviceSelect.disabled = true;
+      setCameraDeviceHint('This browser cannot list cameras.');
+      return Promise.resolve();
+    }
+    return navigator.mediaDevices.enumerateDevices().then(function (devices) {
+      cameraDevices = devices.filter(function (d) { return d.kind === 'videoinput'; });
+      renderCameraOptions();
+      // The list can settle asynchronously (the first enumerate may precede
+      // permission), so persist and repaint any choice it just adopted.
+      savePersisted();
+      renderPreview();
+    }).catch(function (err) {
+      console.warn('Could not list cameras:', err);
+      setCameraDeviceHint('Could not read the camera list.');
+    });
+  }
+
+  /** Asks for camera permission once so the device names become available,
+   *  then re-lists. The stream is stopped immediately — the display opens the
+   *  camera for real when the panel is launched. */
+  function primeCameraNames() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+    // Only worth prompting when there is actually a choice to present: with
+    // one camera (or none) the picker needs no names.
+    if (cameraDevices.length <= 1) return;
+    if (cameraDevices.every(function (d) { return d.label; })) return;
+    navigator.mediaDevices.getUserMedia({ video: true }).then(function (stream) {
+      stream.getTracks().forEach(function (track) { track.stop(); });
+      return refreshCameras();
+    }).catch(function () {
+      // Refused: the ids are still usable, so leave whatever the picker has.
+    });
+  }
+
+  el.cameraDeviceSelect.addEventListener('change', function () {
+    preview.cameraDeviceId = el.cameraDeviceSelect.value || null;
+    savePersisted();
+    // Switching camera is live once the feed is on the screen — the operator
+    // wants the other camera up now, not after another Launch.
+    if (liveMatchesMode('camera')) pushLive(false);
+  });
+
+  if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+    navigator.mediaDevices.addEventListener('devicechange', function () {
+      refreshCameras().then(primeCameraNames);
+    });
+  }
+
   el.cameraStopBtn.addEventListener('click', function () { setMode('timer'); });
 
   /* ==========================================================================
@@ -857,10 +1028,12 @@
       btn.classList.toggle('active', btn.dataset.mode === mode);
     });
 
-    // Camera: nothing to store, but keep the operator honest about needing to
-    // launch it before it reaches the screen.
+    // Camera: list the connected cameras and, the first time, ask for
+    // permission so their real names appear. Nothing reaches the screen until
+    // Launch is pressed.
     if (mode === 'camera') {
-      setCameraStatus('Camera panel selected — press Launch to open the display device’s camera.');
+      setCameraStatus('Camera panel selected — press Launch to open the chosen camera on the display.');
+      refreshCameras().then(primeCameraNames);
     }
 
     afterPreviewChange();
@@ -954,6 +1127,11 @@
     if (preview.media && preview.media.name) {
       setMediaStatus('Ready — press Launch to show ' + preview.media.name + '.');
     }
+
+    // Read the camera list up front so the picker is ready the moment the
+    // operator switches to Camera. Permission is only requested when they
+    // actually open that panel (setMode), not on every console load.
+    refreshCameras();
 
     // Paint the iframe. It may already be loaded when this runs (cache), in
     // which case the `load` event will never fire again.

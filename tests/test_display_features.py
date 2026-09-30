@@ -189,7 +189,7 @@ def main():
             check("re-launching the same media does not remount it",
                   disp.evaluate("document.querySelector('#media-mount audio').__marker") == "kept")
 
-            # ---- stepping is preview-only ------------------------------------
+            # ---- stepping a live lyric goes straight to the screen -----------
             con.click('button[data-mode="lyrics"]')
             con.wait_for_timeout(400)
             con.click("#launch-btn")
@@ -198,21 +198,26 @@ def main():
             con.evaluate("document.activeElement && document.activeElement.blur()")
             con.keyboard.press("ArrowDown")
             con.wait_for_timeout(700)
-            check("a step does not reach the screen",
-                  disp.evaluate("document.querySelector('#lyrics-track .lyric-line.is-active').textContent") == live_line)
-            check("a step still moves the preview",
+            check("a live lyric step reaches the screen without a launch",
+                  disp.evaluate("document.querySelector('#lyrics-track .lyric-line.is-active').textContent") != live_line)
+            check("the preview followed the live step",
                   con.evaluate("!!document.querySelector('#preview').contentWindow.document"
                                ".querySelector('#lyrics-track .lyric-line.is-active')"))
-            con.click("#launch-btn")
-            con.wait_for_timeout(700)
-            check("launching after a step puts the new line on the screen",
-                  disp.evaluate("document.querySelector('#lyrics-track .lyric-line.is-active').textContent") != live_line)
+            check("the launch note still reads live after a step",
+                  "Live on the church screen" in con.inner_text("#preview-note"),
+                  con.inner_text("#preview-note"))
 
             # ---- camera panel, separate from media ---------------------------
             con.click('button[data-mode="camera"]')
-            con.wait_for_timeout(400)
+            con.wait_for_timeout(600)
             check("camera is its own mode, not media",
                   con.evaluate("document.querySelector('button[data-mode=\\'camera\\']').classList.contains('active')"))
+            # The picker lists cameras; the fake device offers exactly one, so
+            # it is adopted silently and the picker reports that.
+            check("the camera picker is present",
+                  con.evaluate("!!document.getElementById('camera-device-select')"))
+            check("a single camera is selected automatically",
+                  "One camera" in con.inner_text("#camera-device-hint"), con.inner_text("#camera-device-hint"))
             con.click("#launch-btn")
             con.wait_for_timeout(2500)
             check("camera panel mounts a live video",
@@ -225,6 +230,60 @@ def main():
             con.wait_for_timeout(1200)
             check("leaving the camera stops the stream",
                   disp.evaluate("!document.getElementById('camera-video').srcObject"))
+
+            # ---- camera picker with several cameras --------------------------
+            # The fake device only offers one camera, so stub enumerateDevices
+            # to prove the picker's own decision: with more than one camera
+            # nothing is chosen until the operator does.
+            ctx2 = browser.new_context(
+                viewport={"width": 1600, "height": 900}, permissions=["camera"])
+            ctx2.add_init_script("""
+                Object.defineProperty(navigator.mediaDevices, 'enumerateDevices', {
+                  configurable: true,
+                  value: async () => ([
+                    {kind:'videoinput', deviceId:'cam-front', label:'Built-in webcam', groupId:'g1'},
+                    {kind:'videoinput', deviceId:'cam-usb',   label:'USB Capture Card', groupId:'g2'},
+                  ]),
+                });
+            """)
+            errs2 = []
+            disp2 = ctx2.new_page(); disp2.on("pageerror", lambda e: errs2.append(str(e)))
+            disp2.add_init_script("""
+                window.__camCalls = [];
+                var real = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+                navigator.mediaDevices.getUserMedia = function (c) {
+                  window.__camCalls.push(JSON.stringify(c));
+                  return real(c);
+                };
+            """)
+            disp2.goto(f"{BASE}/display.html", wait_until="load")
+            con2 = ctx2.new_page(); con2.on("pageerror", lambda e: errs2.append(str(e)))
+            con2.goto(f"{BASE}/console.html", wait_until="load")
+            con2.wait_for_timeout(3200)
+            con2.click('button[data-mode="camera"]')
+            con2.wait_for_timeout(700)
+            opts = con2.evaluate(
+                "Array.from(document.querySelectorAll('#camera-device-select option'))"
+                ".map(function(o){return {v:o.value,t:o.textContent}})")
+            check("the picker lists every camera", len(opts) == 3, str(opts))
+            check("the picker offers a default alongside the cameras",
+                  opts[0]["v"] == "" and "Default" in opts[0]["t"], str(opts))
+            check("no camera is auto-chosen when there are several",
+                  con2.input_value("#camera-device-select") == "",
+                  con2.input_value("#camera-device-select"))
+            check("the picker is enabled when there is a choice",
+                  con2.evaluate("!document.getElementById('camera-device-select').disabled"))
+
+            con2.select_option("#camera-device-select", "cam-usb")
+            con2.click("#launch-btn")
+            con2.wait_for_timeout(2500)
+            calls = disp2.evaluate("window.__camCalls")
+            check("the chosen camera id is what the display opens",
+                  any("cam-usb" in c for c in calls), str(calls))
+            check("the second display got a live feed",
+                  disp2.evaluate("!!document.getElementById('camera-video').srcObject"))
+            errs.extend(errs2)
+            ctx2.close()
 
             # ---- text panel, dressed like scripture --------------------------
             con.click('button[data-mode="text"]')
@@ -245,6 +304,31 @@ def main():
             check("the text title is styled like the scripture reference",
                   disp.evaluate("getComputedStyle(document.getElementById('text-title')).fontFamily") ==
                   disp.evaluate("getComputedStyle(document.getElementById('scripture-reference')).fontFamily"))
+
+            # A long passage must stretch and shrink inside the glass, never
+            # spill off the top/bottom/left/right of the projection.
+            long_body = " ".join([
+                "The Lord is my shepherd I shall not want he maketh me to lie down "
+                "in green pastures he leadeth me beside the still waters"] * 10)
+            con.fill("#text-body-input", long_body)
+            con.fill("#text-title-input", "A long announcement heading that keeps going")
+            con.click("#launch-btn")
+            con.wait_for_timeout(900)
+            spill = disp.evaluate(
+                "(function(){var p=document.getElementById('text-view');var b=document.getElementById('text-body');"
+                "var pr=p.getBoundingClientRect(),br=b.getBoundingClientRect();"
+                "return {panelTop:pr.top,panelBottom:pr.bottom,panelLeft:pr.left,panelRight:pr.right,"
+                "bodyTop:br.top,bodyBottom:br.bottom,bodyLeft:br.left,bodyRight:br.right,"
+                "vw:window.innerWidth,vh:window.innerHeight};})()")
+            check("a long text panel stays on the stage vertically",
+                  0 <= spill["panelTop"] and spill["panelBottom"] <= spill["vh"] + 1, str(spill))
+            check("a long text panel stays on the stage horizontally",
+                  0 <= spill["panelLeft"] and spill["panelRight"] <= spill["vw"] + 1, str(spill))
+            check("a long text body stays inside the panel",
+                  spill["bodyTop"] >= spill["panelTop"] - 1 and spill["bodyBottom"] <= spill["panelBottom"] + 1,
+                  str(spill))
+            check("a long text shrinks rather than spilling",
+                  fs("#text-body") < 89.6, str(fs("#text-body")))
 
             # ---- No Panel -----------------------------------------------------
             con.click("#no-panel-toggle")

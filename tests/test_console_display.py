@@ -133,21 +133,54 @@ def main():
             check("launch puts the verse on the screen", "God so loved" in lv("scripture-text"), lv("scripture-text")[:50])
             check("reference reaches the screen", "John 3:16" in lv("scripture-reference"), lv("scripture-reference"))
 
+            # Stepping a verse is live once scripture is already on the screen:
+            # the congregation follows along without a relaunch.
             console.evaluate("document.activeElement && document.activeElement.blur()")
             console.keyboard.press("ArrowRight")
             console.wait_for_timeout(600)
-            check("ArrowRight moves the preview only, not the screen",
-                  "John 3:16" in lv("scripture-reference"), lv("scripture-reference"))
-            check("ArrowRight advanced the preview",
-                  "John 3:17" in pv("scripture-reference"), pv("scripture-reference"))
-            console.click("#launch-btn")
-            console.wait_for_timeout(700)
-            check("launching puts the stepped verse on the screen",
+            check("ArrowRight steps the live verse on the screen",
                   "John 3:17" in lv("scripture-reference"), lv("scripture-reference"))
+            check("ArrowRight advanced the preview too",
+                  "John 3:17" in pv("scripture-reference"), pv("scripture-reference"))
+            check("the step did not need a launch",
+                  "Live on the church screen" in console.inner_text("#preview-note"),
+                  console.inner_text("#preview-note"))
             console.keyboard.press("ArrowLeft")
             console.wait_for_timeout(600)
+            check("ArrowLeft steps the live verse back on the screen",
+                  "John 3:16" in lv("scripture-reference"), lv("scripture-reference"))
             check("ArrowLeft moves the preview back",
                   "John 3:16" in pv("scripture-reference"), pv("scripture-reference"))
+
+            # Choosing a *new* reference is not a step: it stays launch-gated.
+            console.select_option("#scripture-book-select", "43")  # Acts
+            console.fill("#scripture-chapter-input", "2")
+            console.fill("#scripture-verse-input", "1")
+            console.click("#scripture-go-btn")
+            console.wait_for_timeout(600)
+            check("a new reference waits for launch",
+                  "John 3:16" in lv("scripture-reference"), lv("scripture-reference"))
+            check("the new reference is previewed",
+                  "Acts 2:1" in pv("scripture-reference"), pv("scripture-reference"))
+            console.click("#launch-btn")
+            console.wait_for_timeout(700)
+            check("launching puts the new reference on the screen",
+                  "Acts 2:1" in lv("scripture-reference"), lv("scripture-reference"))
+
+            # Stepping a preview that has already drifted must not blast the
+            # unlaunched reference to the screen — it still waits for Launch.
+            console.select_option("#scripture-book-select", "44")  # Romans
+            console.fill("#scripture-chapter-input", "1")
+            console.fill("#scripture-verse-input", "1")
+            console.click("#scripture-go-btn")
+            console.wait_for_timeout(500)
+            console.evaluate("document.activeElement && document.activeElement.blur()")
+            console.keyboard.press("ArrowRight")
+            console.wait_for_timeout(600)
+            check("a step on a drifted preview stays off the screen",
+                  "Acts 2:1" in lv("scripture-reference"), lv("scripture-reference"))
+            check("the drifted step still advanced the preview",
+                  "Romans 1:2" in pv("scripture-reference"), pv("scripture-reference"))
 
             # ---------- lyrics ----------------------------------------------------
             console.click('button[data-mode="lyrics"]')
@@ -163,15 +196,38 @@ def main():
             check("lyrics render four lines",
                   display.evaluate("document.querySelectorAll('#lyrics-track .lyric-line').length") == 4)
             check("first lyric line is active", idx() == 0, str(idx()))
+            # Stepping a lyric line is live once lyrics are already on screen.
             console.keyboard.press("ArrowDown")
             console.wait_for_timeout(600)
-            check("ArrowDown moves the preview only, not the screen", idx() == 0, str(idx()))
-            console.click("#launch-btn")
-            console.wait_for_timeout(700)
-            check("launching puts the stepped lyric on the screen", idx() == 1, str(idx()))
+            check("ArrowDown steps the live lyric line on the screen", idx() == 1, str(idx()))
             console.keyboard.press("ArrowUp")
             console.wait_for_timeout(600)
-            check("ArrowUp leaves the screen on the launched line", idx() == 1, str(idx()))
+            check("ArrowUp steps the live lyric line back", idx() == 0, str(idx()))
+
+            # Saving a song is the edit exemption: it goes live at once.
+            console.fill("#song-title-input", "Great Is Thy Faithfulness")
+            console.fill("#song-lyrics-input", "Great is thy faithfulness\nMorning by morning new mercies I see")
+            console.click("#song-save-btn")
+            console.wait_for_timeout(800)
+            check("saving a song puts it on the screen",
+                  display.evaluate("document.getElementById('lyrics-title').textContent") == "Great Is Thy Faithfulness")
+
+            # Picking a *different* song from the list is not a step, so it
+            # waits for launch like any other new content.
+            console.evaluate(
+                "Array.from(document.querySelectorAll('#song-list .song-item'))"
+                ".find(function(r){return r.textContent.indexOf('Amazing Grace')!==-1})"
+                ".querySelector('.song-load').click()")
+            console.wait_for_timeout(600)
+            check("picking a song from the list waits for launch",
+                  display.evaluate("document.getElementById('lyrics-title').textContent") == "Great Is Thy Faithfulness")
+            check("the picked song is previewed",
+                  console.evaluate("document.getElementById('preview').contentWindow.document"
+                                   ".getElementById('lyrics-title').textContent") == "Amazing Grace")
+            console.click("#launch-btn")
+            console.wait_for_timeout(700)
+            check("launching puts the picked song on the screen",
+                  display.evaluate("document.getElementById('lyrics-title').textContent") == "Amazing Grace")
 
             # ---------- console reload keeps driving -------------------------------
             console.reload(wait_until="load")

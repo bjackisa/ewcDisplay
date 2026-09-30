@@ -313,6 +313,12 @@ button, input{ font-family:inherit; }
 
 .scripture-panel{
   max-width:min(84vw, 62rem);
+  /* A hard ceiling on the glass itself. Without it the panel grows to whatever
+     the verse needs and the centred flex box pushes the top and bottom off the
+     16:9 stage — the exact overflow this is here to stop. display.js shrinks
+     the type to fit the space that is left. */
+  max-height:88%;
+  overflow:hidden;
 }
 
 .scripture-text{
@@ -320,14 +326,20 @@ button, input{ font-family:inherit; }
   font-style:italic;
   font-weight:500;
   /* Sized for the back row: the verse is the whole point of the view, so it
-     carries the panel rather than sitting in it. A longer verse is allowed to
-     wrap onto more lines — the panel grows with it — and display.js only
-     scales the very longest verses down, never below legibility. */
+     carries the panel rather than sitting in it. A longer verse wraps onto
+     more lines and may stretch sideways, but the panel caps its own width and
+     height and display.js scales the type down rather than letting anything
+     spill off the projection. */
   font-size:clamp(2.8rem, 5.4vw, 5.4rem);
   line-height:1.24;
   color:var(--cloud);
   text-align:center;
   text-shadow:0 2px 14px rgba(0,0,0,.35);
+  /* min-width:0 lets this flex item shrink below its min-content width, and
+     `anywhere` counts a broken word in that width — together a stray long
+     token wraps instead of pushing the panel wider than the stage. */
+  min-width:0;
+  overflow-wrap:anywhere;
   transition:opacity .35s ease;
 }
 
@@ -458,7 +470,14 @@ button, input{ font-family:inherit; }
 /* -- Text: dressed like the scripture panel. The body takes the verse
       treatment (.scripture-text); the title takes the reference treatment
       (.scripture-reference). */
-.text-panel{ max-width:min(88vw, 68rem); }
+.text-panel{
+  max-width:min(88vw, 68rem);
+  /* Same ceiling as the scripture panel: a long typed passage stretches
+     sideways to the cap, then display.js shrinks it to fit rather than letting
+     it run off the top or bottom of the screen. */
+  max-height:88%;
+  overflow:hidden;
+}
 .text-body{
   font-family:var(--font-editorial);
   font-style:italic;
@@ -468,7 +487,8 @@ button, input{ font-family:inherit; }
   color:var(--cloud);
   text-align:center;
   text-shadow:0 2px 14px rgba(0,0,0,.35);
-  overflow-wrap:break-word;
+  min-width:0;            /* let a stray long token wrap, not widen the panel */
+  overflow-wrap:anywhere;
 }
 .text-title{
   font-family:var(--font-display);

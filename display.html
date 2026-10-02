@@ -87,6 +87,15 @@ body{ cursor:none; }
       <p class="camera-status" id="camera-status" hidden></p>
     </section>
 
+    <!-- An embedded webpage, framed by the panel. The console sends only the
+         URL; this page loads it in an <iframe>. -->
+    <section id="webpage-view" class="panel webpage-panel">
+      <div class="fg-webpage" id="webpage-mount">
+        <iframe id="webpage-frame" title="Embedded webpage" allow="autoplay; encrypted-media; fullscreen; picture-in-picture"></iframe>
+      </div>
+      <p class="webpage-status" id="webpage-status" hidden></p>
+    </section>
+
   </main>
 
   <p class="micro-time" id="micro-time"></p>

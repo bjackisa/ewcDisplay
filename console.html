@@ -44,6 +44,21 @@
     <!-- ------------------------------------------------------------------ -->
     <aside id="settings-panel">
 
+      <!-- AI setup. One key powers verse search, text polish and AI images;
+           it is kept in this browser's localStorage and sent only to Google's
+           Gemini endpoint. -->
+      <details class="ai-setup" id="ai-setup">
+        <summary>AI settings</summary>
+        <div class="field" style="margin-top:.6rem;">
+          <label for="ai-key-input">Gemini API key</label>
+          <input type="password" id="ai-key-input" placeholder="Paste your Gemini API key" autocomplete="off">
+          <p class="hint">Powers the verse search, the text polish button and the AI image generator. It is stored only in this browser and sent only to Google's Gemini API.</p>
+          <p class="hint" id="ai-key-status"></p>
+        </div>
+      </details>
+
+      <hr class="sep">
+
       <!-- Only the chosen panel's own controls are shown. Everything here is
            preview-only until Launch is pressed. -->
       <div id="mode-fields">
@@ -68,7 +83,16 @@
         </div>
 
         <div id="scripture-fields" hidden>
-          <div class="field-row">
+          <div class="field ai-search">
+            <label for="scripture-ai-input">Find a verse</label>
+            <div class="ai-search__row">
+              <input type="text" id="scripture-ai-input" placeholder="Type anything you know: “God so loved the world”, “Esther 8:9”, “where Jesus calms the storm”…" autocomplete="off">
+              <button class="btn primary" id="scripture-ai-btn" title="Find this verse with AI">Find</button>
+            </div>
+            <p class="hint" id="scripture-ai-status">Type anything you remember — a phrase, a reference, a story — and AI finds the exact verse and previews it, ready to launch.</p>
+          </div>
+
+          <div class="field-row" style="margin-top:.9rem;">
             <div class="field">
               <label for="scripture-book-select">Book</label>
               <select id="scripture-book-select" disabled>
@@ -126,7 +150,11 @@
         <div id="text-fields" hidden>
           <div class="field">
             <label for="text-body-input">Text to display</label>
-            <textarea id="text-body-input" placeholder="Type a verse, a quote, an announcement…"></textarea>
+            <div class="ai-textarea">
+              <textarea id="text-body-input" placeholder="Type a verse, a quote, an announcement…"></textarea>
+              <button type="button" class="ai-polish-btn" id="text-polish-btn" title="Polish this text with AI" aria-label="Polish this text with AI">✦</button>
+            </div>
+            <p class="hint" id="text-polish-status"></p>
           </div>
           <div class="field" style="margin-top:.7rem;">
             <label for="text-title-input">Title (optional)</label>
@@ -141,6 +169,24 @@
             <button class="btn" id="media-clear-btn">Remove</button>
           </div>
           <input type="file" id="media-file-input" accept="image/*,video/*,audio/*">
+
+          <div class="field" style="margin-top:.9rem;">
+            <label for="media-youtube-input">YouTube video</label>
+            <div class="ai-search__row">
+              <input type="text" id="media-youtube-input" placeholder="Paste a YouTube video URL…" autocomplete="off">
+              <button class="btn" id="media-youtube-btn">Embed</button>
+            </div>
+            <p class="hint">Paste any YouTube link — it plays on the church screen inside the panel.</p>
+          </div>
+
+          <div class="field" style="margin-top:.9rem;">
+            <label for="media-ai-prompt">Generate an image with AI</label>
+            <div class="ai-search__row">
+              <input type="text" id="media-ai-prompt" placeholder="Describe the image you want…" autocomplete="off">
+              <button class="btn primary" id="media-ai-btn">Generate</button>
+            </div>
+          </div>
+
           <p class="hint" id="media-status"></p>
           <p class="hint">Photos, GIFs, videos and audio are copied to the display’s own store, so they play even if this window is closed. The panel grows to fit them.</p>
         </div>
@@ -158,6 +204,18 @@
           </div>
           <p class="hint" id="camera-status-console"></p>
           <p class="hint">Launching the Camera opens the chosen camera on the display device itself. Switching camera reopens the feed live; launching any other panel stops it. The panel grows to fit the feed.</p>
+        </div>
+
+        <div id="webpage-fields" hidden>
+          <div class="field">
+            <label for="webpage-url-input">Webpage URL</label>
+            <div class="ai-search__row">
+              <input type="text" id="webpage-url-input" placeholder="https://example.com" autocomplete="off">
+              <button class="btn primary" id="webpage-go-btn">Load</button>
+            </div>
+            <p class="hint" id="webpage-status"></p>
+            <p class="hint">The page is shown inside the panel frame. Many sites block being embedded (they send <code>X-Frame-Options</code>), so if a page stays blank it cannot be framed — try a page that allows embedding.</p>
+          </div>
         </div>
 
       </div>
@@ -184,6 +242,11 @@
           <button class="btn" id="clear-image-btn">Remove</button>
         </div>
         <input type="file" id="bg-file-input" accept="image/*">
+        <div class="ai-search__row" style="margin-top:.6rem;">
+          <input type="text" id="bg-ai-prompt" placeholder="Or describe a background to generate…" autocomplete="off">
+          <button class="btn primary" id="bg-ai-btn">Generate</button>
+        </div>
+        <p class="hint" id="bg-ai-status"></p>
         <p class="hint">Used behind the glass panel. If none is chosen, an ambient sunrise scene is shown instead.</p>
       </div>
 
@@ -231,6 +294,7 @@
       <button type="button" data-mode="text">Text</button>
       <button type="button" data-mode="media">Media</button>
       <button type="button" data-mode="camera">Camera</button>
+      <button type="button" data-mode="webpage">Webpage</button>
     </div>
   </footer>
 

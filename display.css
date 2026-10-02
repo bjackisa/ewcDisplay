@@ -344,6 +344,10 @@ button, input{ font-family:inherit; }
 }
 
 .scripture-reference{
+  /* flex:none keeps the reference at its natural height no matter how tall the
+     verse above it grows; the fitter makes room for it, and this guarantees it
+     can never be the flex item that gets squeezed off the panel. */
+  flex:none;
   font-family:var(--font-display);
   font-weight:600;
   font-size:clamp(1.4rem, 2.3vw, 2.3rem);
@@ -465,7 +469,7 @@ button, input{ font-family:inherit; }
    background: everything is on the panel except "No Panel", which removes
    the glass altogether and leaves only the background.
    ========================================================================== */
-#text-view, #media-view, #camera-view{ display:none; }
+#text-view, #media-view, #camera-view, #webpage-view{ display:none; }
 
 /* -- Text: dressed like the scripture panel. The body takes the verse
       treatment (.scripture-text); the title takes the reference treatment
@@ -491,6 +495,9 @@ button, input{ font-family:inherit; }
   overflow-wrap:anywhere;
 }
 .text-title{
+  /* Same guarantee as the scripture reference: the title line keeps its natural
+     height while the body above it shrinks to fit. */
+  flex:none;
   font-family:var(--font-display);
   font-weight:600;
   font-size:clamp(1.5rem, 2.4vw, 2.4rem);
@@ -573,6 +580,48 @@ button, input{ font-family:inherit; }
   text-align:center;
 }
 .camera-status[hidden]{ display:none; }
+
+/* -- YouTube inside the media panel: fill the same mount the stored files use. */
+.fg-youtube{
+  width:100%;
+  height:100%;
+  border:0;
+  border-radius:clamp(1rem, 1.8vw, 2rem);
+  background:#000;
+}
+
+/* -- Webpage: framed by the same glass panel, sized like media so the page has
+      a real viewport rather than a sliver. */
+.webpage-panel{
+  width:min(92vw, 90rem);
+  max-width:96%;
+  height:min(88vh, 56rem);
+  max-height:92%;
+  padding:clamp(1rem, 2.2vh, 2rem);
+}
+.fg-webpage{
+  width:100%;
+  height:100%;
+  display:flex;
+  border-radius:clamp(1rem, 1.8vw, 2rem);
+  overflow:hidden;
+  background:#fff;
+}
+#webpage-frame{
+  flex:1;
+  width:100%;
+  height:100%;
+  border:0;
+  background:#fff;
+}
+.webpage-status{
+  font-family:var(--font-display);
+  font-weight:500;
+  font-size:clamp(1rem, 1.6vw, 1.5rem);
+  color:var(--cloud-dim);
+  text-align:center;
+}
+.webpage-status[hidden]{ display:none; }
 
 /* The camera preview is mirrored so a speaker sees themselves as in a mirror;
    a plain webcam feed would otherwise feel backwards to them. */

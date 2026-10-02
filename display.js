@@ -64,6 +64,10 @@
     cameraVideo: document.getElementById('camera-video'),
     cameraStatus: document.getElementById('camera-status'),
 
+    webpageView: document.getElementById('webpage-view'),
+    webpageFrame: document.getElementById('webpage-frame'),
+    webpageStatus: document.getElementById('webpage-status'),
+
     microTime: document.getElementById('micro-time')
   };
 
@@ -85,7 +89,9 @@
     scripture: { text: 'Loading Scripture…', reference: '' },
     lyrics: { title: 'Lyrics', lines: null, index: 0, emptyMessage: '' },
     text: { body: '', title: '' },
-    media: null, // {kind, mime, name} of the stored media to show, or null
+    media: null, // {kind, mime, name, id, url} of the stored media to show, or null
+    /* The webpage framed by the panel, or '' when none is set. */
+    webpageUrl: '',
     /* Which physical camera to open. The console owns the picker and sends the
        chosen deviceId; null means "whatever the browser considers default". */
     cameraDeviceId: null,
@@ -380,6 +386,17 @@
     fitToPanel(el.textBody, el.textView);
   }
 
+  /** Outer height of a box, including its own margins. The panel's children
+   *  are <p> elements and the browser's default paragraph margins are *not*
+   *  part of offsetHeight — counting only offsetHeight under-measures the
+   *  stack, so the fitter believes a long verse fits when the reference line
+   *  below it has in fact been pushed past the panel's overflow:hidden edge
+   *  and disappeared. */
+  function outerHeight(node) {
+    var cs = getComputedStyle(node);
+    return node.offsetHeight + (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0);
+  }
+
   /** Reduces a node's font-size until it fits the *panel's own content box*,
    *  never below ~25% of the size CSS gave it (and never under 14px). Width is
    *  left to CSS (the panel caps its own width and long words break), so the
@@ -405,10 +422,13 @@
     }
     var siblingsHeight = 0;
     visible.forEach(function (child) {
-      if (child !== node) siblingsHeight += child.offsetHeight;
+      if (child !== node) siblingsHeight += outerHeight(child);
     });
     var gap = parseFloat(cs.rowGap) || 0;
-    var available = contentHeight - siblingsHeight - gap * Math.max(0, visible.length - 1);
+    // The node's own margins sit inside the flex gap budget too.
+    var nodeCs = getComputedStyle(node);
+    var nodeMargins = (parseFloat(nodeCs.marginTop) || 0) + (parseFloat(nodeCs.marginBottom) || 0);
+    var available = contentHeight - siblingsHeight - nodeMargins - gap * Math.max(0, visible.length - 1);
     if (available <= 0) return;
 
     if (node.scrollHeight <= available) return; // already fits at its CSS size
@@ -642,10 +662,25 @@
     el.fgMedia.appendChild(node);
   }
 
+  /** Mounts a YouTube embed. Only the video id crosses the bus; the iframe is
+   *  built here with the privacy-friendly nocookie host. */
+  function mountYouTube(descriptor) {
+    var frame = document.createElement('iframe');
+    frame.className = 'fg-youtube';
+    frame.src = 'https://www.youtube-nocookie.com/embed/' + descriptor.id +
+      '?autoplay=1&rel=0&playsinline=1';
+    frame.title = 'YouTube video';
+    frame.setAttribute('allow', 'autoplay; encrypted-media; picture-in-picture; fullscreen');
+    frame.setAttribute('allowfullscreen', '');
+    el.fgMedia.appendChild(frame);
+  }
+
   /** Reads the stored media record and mounts it. */
   function renderMedia(descriptor) {
     teardownMedia();
     if (!descriptor) return;
+    // A YouTube video has no stored bytes — the descriptor carries only its id.
+    if (descriptor.kind === 'youtube' && descriptor.id) { mountYouTube(descriptor); return; }
     var token = mediaToken;
     EWC.getForegroundMedia().then(function (record) {
       // Bail if the panel changed while the bytes were being read.
@@ -710,6 +745,21 @@
     });
   }
 
+  /** Frames a webpage inside the panel. The console sends only the URL; the
+   *  page loads here in an <iframe>. A site that forbids framing stays blank —
+   *  there is no reliable way to detect that from the outside, so the console
+   *  hint carries the warning instead. */
+  function renderWebpage(url) {
+    if (!url) {
+      el.webpageFrame.removeAttribute('src');
+      el.webpageStatus.hidden = true;
+      el.webpageStatus.textContent = '';
+      return;
+    }
+    if (el.webpageFrame.getAttribute('src') !== url) el.webpageFrame.setAttribute('src', url);
+    el.webpageStatus.hidden = true;
+  }
+
   /** Shows the typed text: body in the scripture-text style, title in the
    *  scripture-reference style. */
   function renderText(text) {
@@ -726,6 +776,7 @@
 
   var appliedMediaKey = null;
   var appliedCameraKey = null;
+  var appliedWebpageKey = null;
   var cameraOpen = false;
 
   /** Shows the panel the mode names, and applies "No Panel". Runs on every
@@ -743,6 +794,7 @@
     el.textView.style.display = shown && mode === 'text' ? 'flex' : 'none';
     el.mediaView.style.display = shown && mode === 'media' ? 'flex' : 'none';
     el.cameraView.style.display = shown && mode === 'camera' ? 'flex' : 'none';
+    el.webpageView.style.display = shown && mode === 'webpage' ? 'flex' : 'none';
 
     if (mode === 'media' && shown) {
       var key = JSON.stringify(state.media || null);
@@ -750,6 +802,18 @@
     } else {
       appliedMediaKey = null;
       teardownMedia();
+    }
+
+    // The webpage iframe is only (re)pointed when the URL changes — a silent
+    // re-push must not reload the page the operator is looking at.
+    if (mode === 'webpage' && shown) {
+      if (state.webpageUrl !== appliedWebpageKey) {
+        appliedWebpageKey = state.webpageUrl;
+        renderWebpage(state.webpageUrl);
+      }
+    } else if (appliedWebpageKey !== null) {
+      appliedWebpageKey = null;
+      renderWebpage('');
     }
 
     // The camera is a live device stream, so it is only reopened when the
@@ -776,6 +840,7 @@
         panelHidden: state.panelHidden,
         media: state.media,
         text: state.text,
+        webpageUrl: state.webpageUrl,
         cameraDeviceId: state.cameraDeviceId
       }));
     } catch (err) {}
@@ -789,6 +854,7 @@
     state.panelHidden = !!saved.panelHidden;
     if (saved.media) state.media = saved.media;
     if (saved.text) state.text = saved.text;
+    if (saved.webpageUrl) state.webpageUrl = saved.webpageUrl;
     if (saved.cameraDeviceId) state.cameraDeviceId = saved.cameraDeviceId;
     // A remembered camera cannot be opened without a console to ask for it.
     if (state.mode === 'camera') { state.mode = 'timer'; }
@@ -890,6 +956,8 @@
     // The media descriptor rides on every push, so it survives a console
     // refresh. Without one, keep whatever is already showing.
     if (message.media !== undefined) state.media = message.media || null;
+    // Same for the webpage URL, so a display reload reframes the right page.
+    if (message.webpageUrl !== undefined) state.webpageUrl = message.webpageUrl || '';
     // Same for the chosen camera, so a display reload reopens the right one.
     if (message.cameraDeviceId !== undefined) state.cameraDeviceId = message.cameraDeviceId || null;
 
@@ -924,6 +992,7 @@
       renderText(state.text);
       requestAnimationFrame(fitTextPanel);
     }
+    if (mode === 'webpage') renderWebpage(state.webpageUrl);
   }
 
   /* ==========================================================================

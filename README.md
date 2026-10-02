@@ -49,23 +49,41 @@ stay accurate.
 
 ## The foreground
 
-In front of the background sits a **foreground**, chosen in the console's
-**Foreground** row. Exactly one of four things is on the screen:
+In front of the background sits the **panel**, whose mode is chosen in the
+console's mode picker. Exactly one thing is on the screen:
 
-| Foreground | What shows |
+| Mode | What shows |
 | --- | --- |
-| **Panel** | the glass panel for the chosen mode — countdown, clock, scripture or lyrics |
-| **Media** | a photo, video, GIF or audio file, or the display's own camera feed |
+| **Timer / Clock / Scripture / Lyrics** | the glass panel for that mode |
 | **Text** | a typed quote, with an optional attribution line |
-| **No Display** | nothing — just the background image |
+| **Media** | a photo, video, GIF, audio file or YouTube video |
+| **Camera** | the display's own camera feed |
+| **Webpage** | an external page framed inside the panel |
+| **No Panel** | nothing — just the background image |
 
-Media and text go to the screen **straight away**, like the backdrop photo:
-they are not launched, because the operator is looking at the item they chose.
-The panel is still launched as before.
+Every mode waits for **Launch**, exactly as the timer and scripture always
+have: what the operator previews is what the screen shows. The background
+photo is the one exception; it is scenery, not content, so it is live.
 
 Media files are copied into the display's own store, so a photo, GIF or video
 keeps playing even if the console window is closed. The camera feed is opened
 on the display device itself, so the projector's webcam is the one that shows.
+A YouTube link is streamed from its URL, and a webpage is framed from its URL.
+
+## AI helpers (optional)
+
+The console has an **AI settings** panel holding one Google Gemini API key
+(stored only in that browser). With a key set:
+
+- **Find a verse** — type anything you remember about a verse (a phrase, a
+  reference, or the story) and AI finds the exact book, chapter and verse,
+  loads it from the local KJV text and previews it, ready to Launch.
+- **Polish** — the ✦ button by the text area tidies the typed text and never
+  leaves an em dash behind.
+- **Generate an image** — describe an image and AI creates it, for either the
+  background or the Media panel.
+
+Without a key every AI button simply says so; nothing else needs it.
 
 ## Editing lyrics
 

@@ -147,6 +147,66 @@ body.console{
 }
 
 /* --------------------------------------------------------------------------
+   AI widgets — the API key panel, the "find a verse" row, the textarea polish
+   button and the image prompts. Kept small and quiet so they read as helpers
+   next to the ordinary controls.
+   -------------------------------------------------------------------------- */
+.ai-setup{
+  border:1px solid var(--glass-border);
+  border-radius:.7rem;
+  background:rgba(248,249,253,.04);
+  padding:.5rem .7rem;
+}
+.ai-setup summary{
+  cursor:pointer;
+  font-size:.8rem;
+  color:var(--cloud-dim);
+  letter-spacing:.02em;
+}
+.ai-setup summary:hover{ color:var(--cloud); }
+
+.ai-search__row{
+  display:flex;
+  gap:.5rem;
+  align-items:stretch;
+}
+.ai-search__row input{
+  flex:1 1 auto;
+  min-width:0;
+  background:rgba(248,249,253,.08);
+  border:1px solid var(--glass-border);
+  border-radius:.6rem;
+  padding:.6rem .7rem;
+  color:var(--cloud);
+  font-size:.88rem;
+}
+.ai-search__row .btn{ flex:none; }
+
+/* The textarea with the AI polish button pinned to its top-right corner. */
+.ai-textarea{
+  position:relative;
+  display:flex;
+}
+.ai-textarea textarea{ flex:1; }
+.ai-polish-btn{
+  position:absolute;
+  top:.45rem;
+  right:.45rem;
+  width:1.9rem;
+  height:1.9rem;
+  border-radius:.5rem;
+  border:1px solid var(--glass-border);
+  background:linear-gradient(135deg, var(--sunrise-orange), var(--sunrise-amber));
+  color:var(--navy-950);
+  font-size:.95rem;
+  line-height:1;
+  cursor:pointer;
+  transition:filter .2s ease;
+}
+.ai-polish-btn:hover{ filter:brightness(1.08); }
+.ai-polish-btn:disabled{ filter:grayscale(.6); cursor:default; }
+
+/* --------------------------------------------------------------------------
    Preview
    -------------------------------------------------------------------------- */
 .console__preview{

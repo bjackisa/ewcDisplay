@@ -57,7 +57,9 @@
     activeSongId: null,
     lyricLineIndex: 0,
     text: { body: '', title: '' },
-    media: null, // {kind, mime, name} of the stored media to show, or null
+    media: null, // {kind, mime, name, url} of the stored media to show, or null
+    /* The webpage shown inside the panel frame, or null. */
+    webpageUrl: '',
     /* Which physical camera to open, by deviceId. Null means "let the display
        choose" — which is the right thing when the machine has one camera, or
        when the list has not been read yet. */
@@ -122,6 +124,24 @@
     chooseScriptureFileBtn: document.getElementById('choose-scripture-file-btn'),
     scriptureFileInput: document.getElementById('scripture-file-input'),
 
+    aiKeyInput: document.getElementById('ai-key-input'),
+    aiKeyStatus: document.getElementById('ai-key-status'),
+    scriptureAiInput: document.getElementById('scripture-ai-input'),
+    scriptureAiBtn: document.getElementById('scripture-ai-btn'),
+    scriptureAiStatus: document.getElementById('scripture-ai-status'),
+    textPolishBtn: document.getElementById('text-polish-btn'),
+    textPolishStatus: document.getElementById('text-polish-status'),
+    mediaYoutubeInput: document.getElementById('media-youtube-input'),
+    mediaYoutubeBtn: document.getElementById('media-youtube-btn'),
+    mediaAiPrompt: document.getElementById('media-ai-prompt'),
+    mediaAiBtn: document.getElementById('media-ai-btn'),
+    bgAiPrompt: document.getElementById('bg-ai-prompt'),
+    bgAiBtn: document.getElementById('bg-ai-btn'),
+    bgAiStatus: document.getElementById('bg-ai-status'),
+    webpageUrlInput: document.getElementById('webpage-url-input'),
+    webpageGoBtn: document.getElementById('webpage-go-btn'),
+    webpageStatus: document.getElementById('webpage-status'),
+
     songSearchInput: document.getElementById('song-search-input'),
     songList: document.getElementById('song-list'),
     songTitleInput: document.getElementById('song-title-input'),
@@ -161,6 +181,7 @@
         lyricLineIndex: preview.lyricLineIndex,
         text: preview.text,
         media: preview.media,
+        webpageUrl: preview.webpageUrl,
         cameraDeviceId: preview.cameraDeviceId
       }));
     } catch (err) {
@@ -186,6 +207,7 @@
     if (mode === 'text') return 'the displayed text';
     if (mode === 'media') return content.name ? 'media — ' + content.name : 'media';
     if (mode === 'camera') return 'the camera feed';
+    if (mode === 'webpage') return content.url ? 'the webpage — ' + content.url : 'the webpage';
     return mode;
   }
 
@@ -222,6 +244,9 @@
     if (state.mode === 'text') {
       return { body: state.text.body, title: state.text.title };
     }
+    if (state.mode === 'webpage') {
+      return { url: state.webpageUrl || '' };
+    }
     return {};
   }
 
@@ -235,8 +260,11 @@
       panelHidden: state.panelHidden,
       // The media descriptor rides on every push. It names the file but
       // carries no bytes — the display reads those from the shared store, so a
-      // 200 MB video never crosses the bus.
+      // 200 MB video never crosses the bus. A YouTube descriptor carries only
+      // its URL (kind:'youtube'), so nothing large crosses either.
       media: state.mode === 'media' ? state.media : null,
+      // The webpage URL rides on every push like the media descriptor.
+      webpageUrl: state.mode === 'webpage' ? (state.webpageUrl || '') : '',
       // Which camera to open, by deviceId. Only a string crosses the bus; the
       // display opens the device itself. Null lets the display pick its own.
       cameraDeviceId: state.mode === 'camera' ? (state.cameraDeviceId || null) : null
@@ -274,6 +302,7 @@
       content: buildContent(preview),
       panelHidden: preview.panelHidden,
       media: preview.mode === 'media' ? preview.media : null,
+      webpageUrl: preview.mode === 'webpage' ? (preview.webpageUrl || '') : '',
       cameraDeviceId: preview.mode === 'camera' ? (preview.cameraDeviceId || null) : null
     });
   }
@@ -569,6 +598,371 @@
       console.warn('Could not read the chosen Bible file:', err);
       setScriptureStatus("Could not read " + file.name + " — it doesn't look like the bible JSON format.");
     }).finally(function () { el.scriptureFileInput.value = ''; });
+  });
+
+  /* ==========================================================================
+     9b. AI — verse search, text polish and image generation
+
+     One Google Gemini API key powers all three. The key is entered by the
+     operator and kept only in this browser's localStorage; it is sent to
+     Google's endpoint and nowhere else. Nothing here is required for the rest
+     of the console to work — every AI button degrades to a clear message when
+     no key is set or the request fails.
+     ========================================================================== */
+
+  var AI_KEY_STORAGE = 'ewc-display-gemini-key-v1';
+  var AI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/';
+  var AI_TEXT_MODEL = 'gemini-flash-latest';
+  // Image generation is a separate, quota-billed model. Kept overridable in
+  // one place because Google renames these as the previews graduate.
+  var AI_IMAGE_MODEL = 'gemini-2.5-flash-image';
+  var AI_TIMEOUT_MS = 60000;
+
+  function getAiKey() {
+    try { return localStorage.getItem(AI_KEY_STORAGE) || ''; } catch (err) { return ''; }
+  }
+
+  function setAiKeyStatus(message, isError) {
+    el.aiKeyStatus.textContent = message || '';
+    el.aiKeyStatus.style.color = isError ? 'var(--sunrise-orange)' : '';
+  }
+
+  /** Reports the saved key back to the operator (masked) without ever logging
+   *  or displaying it in full. */
+  function reflectAiKey() {
+    var key = getAiKey();
+    el.aiKeyInput.value = key;
+    setAiKeyStatus(key ? 'A key is saved on this browser.' : 'No key saved yet — AI features are off.');
+  }
+
+  /** One Gemini generateContent attempt. Rejects with an Error carrying a
+   *  `retryable` flag for the transient failures worth another try. */
+  function aiAttempt(model, key, body) {
+    var controller = window.AbortController ? new AbortController() : null;
+    var timer = controller ? setTimeout(function () { controller.abort(); }, AI_TIMEOUT_MS) : null;
+
+    return fetch(AI_ENDPOINT + model + ':generateContent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-goog-api-key': key },
+      body: JSON.stringify(body),
+      signal: controller ? controller.signal : undefined
+    }).then(function (response) {
+      return response.json().catch(function () { return {}; }).then(function (data) {
+        if (!response.ok) {
+          var detail = data && data.error && data.error.message ? data.error.message : ('HTTP ' + response.status);
+          var err = new Error(response.status === 429
+            ? 'The AI service is out of quota right now. ' + detail
+            : detail);
+          // 503 "high demand" and 500 are worth retrying; quota is not.
+          err.retryable = response.status === 500 || response.status === 503 || response.status === 504;
+          throw err;
+        }
+        return data;
+      });
+    }).catch(function (err) {
+      // A network failure or an aborted request is worth one more try too.
+      if (!err.retryable && (err.name === 'AbortError' || err.name === 'TypeError')) err.retryable = true;
+      throw err;
+    }).finally(function () {
+      if (timer) clearTimeout(timer);
+    });
+  }
+
+  /** Runs one Gemini generateContent call, retrying the transient "high demand"
+   *  failures the free endpoint throws often. Resolves with the parsed JSON
+   *  body; rejects with a short, human-readable Error for the console to show. */
+  function aiGenerate(model, body) {
+    var key = getAiKey();
+    if (!key) return Promise.reject(new Error('Add your Gemini API key in AI settings first.'));
+    if (!window.fetch) return Promise.reject(new Error('This browser cannot reach the AI service.'));
+
+    var attempts = 3;
+    function run(n) {
+      return aiAttempt(model, key, body).catch(function (err) {
+        if (n + 1 < attempts && err.retryable) {
+          return new Promise(function (resolve) { setTimeout(resolve, 1200 * (n + 1)); })
+            .then(function () { return run(n + 1); });
+        }
+        throw err;
+      });
+    }
+    return run(0);
+  }
+
+  /** Pulls the first text part out of a Gemini response. */
+  function aiFirstText(data) {
+    var parts = (data && data.candidates && data.candidates[0]
+      && data.candidates[0].content && data.candidates[0].content.parts) || [];
+    for (var i = 0; i < parts.length; i++) {
+      if (typeof parts[i].text === 'string' && parts[i].text) return parts[i].text;
+    }
+    return '';
+  }
+
+  /** Pulls the first inline image (base64 + mime) out of a Gemini response. */
+  function aiFirstImage(data) {
+    var parts = (data && data.candidates && data.candidates[0]
+      && data.candidates[0].content && data.candidates[0].content.parts) || [];
+    for (var i = 0; i < parts.length; i++) {
+      var inline = parts[i].inlineData || parts[i].inline_data;
+      if (inline && inline.data) {
+        return { mime: inline.mimeType || inline.mime_type || 'image/png', data: inline.data };
+      }
+    }
+    return null;
+  }
+
+  /** Decodes a base64 image part into a Blob. */
+  function aiImageBlob(image) {
+    var binary = atob(image.data);
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type: image.mime });
+  }
+
+  /* -- The API key field ---------------------------------------------------- */
+
+  el.aiKeyInput.addEventListener('change', function () {
+    var key = el.aiKeyInput.value.trim();
+    try {
+      if (key) localStorage.setItem(AI_KEY_STORAGE, key);
+      else localStorage.removeItem(AI_KEY_STORAGE);
+    } catch (err) { console.warn('Could not save the AI key:', err); }
+    reflectAiKey();
+  });
+
+  /* -- 9b(i) Verse search ---------------------------------------------------
+     The operator types whatever they remember — a phrase, a reference, a
+     story — and Gemini resolves it to a book/chapter/verse. The resolved
+     reference is then loaded from the *local* KJV text, so the verse that
+     reaches the screen is the same KJV text every other verse uses, never
+     something the model retyped. */
+
+  var AI_VERSE_SCHEMA = {
+    type: 'object',
+    properties: {
+      book: { type: 'string', description: 'Full King James Version book name, e.g. "John", "1 Corinthians".' },
+      chapter: { type: 'integer' },
+      verse: { type: 'integer' },
+      confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+      note: { type: 'string', description: 'A short explanation of the choice.' }
+    },
+    required: ['book', 'chapter', 'verse']
+  };
+
+  function setScriptureAiStatus(message, isError) {
+    el.scriptureAiStatus.textContent = message || '';
+    el.scriptureAiStatus.style.color = isError ? 'var(--sunrise-orange)' : '';
+  }
+
+  /** Finds a book index by name, tolerating case, punctuation and the common
+   *  numbered forms ("1 Corinthians", "I Corinthians", "1Corinthians"). */
+  function findBookIndex(name) {
+    if (!bibleData || !name) return -1;
+    var wanted = String(name).toLowerCase()
+      .replace(/\b(i|ii|iii)\b/g, function (m) { return { i: '1', ii: '2', iii: '3' }[m]; })
+      .replace(/[^a-z0-9]/g, '');
+    for (var i = 0; i < bibleData.length; i++) {
+      var canonical = String(EWC.bookName(bibleData, i)).toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (canonical === wanted) return i;
+    }
+    // Fall back to a starts-with match so "Psalm" still finds "Psalms".
+    for (var j = 0; j < bibleData.length; j++) {
+      var short = String(EWC.bookName(bibleData, j)).toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (short && (short.indexOf(wanted) === 0 || wanted.indexOf(short) === 0)) return j;
+    }
+    return -1;
+  }
+
+  /** Loads an AI-resolved reference into the preview. Clamps to the real text,
+   *  fills the picker, and previews it — still launch-gated like any new
+   *  reference, so the operator reviews before it goes up. */
+  function applyFoundVerse(reference) {
+    var bookIndex = findBookIndex(reference.book);
+    if (bookIndex < 0) {
+      setScriptureAiStatus('Found “' + reference.book + '” but it is not in this Bible text.', true);
+      return false;
+    }
+    var book = bibleData[bookIndex];
+    var chapter = Math.min(Math.max(reference.chapter || 1, 1), book.chapters.length);
+    var verses = book.chapters[chapter - 1];
+    var verse = Math.min(Math.max(reference.verse || 1, 1), verses.length);
+
+    preview.scriptureBookIndex = bookIndex;
+    preview.scriptureChapter = chapter;
+    preview.scriptureVerse = verse;
+    renderScripture();
+    setMode('scripture');
+    afterPreviewChange();
+
+    var label = EWC.bookName(bibleData, bookIndex) + ' ' + chapter + ':' + verse;
+    setScriptureAiStatus('Found ' + label + ' — review it, then press Launch.' +
+      (reference.note ? ' ' + reference.note : ''));
+    return true;
+  }
+
+  function searchVerseWithAi() {
+    var query = el.scriptureAiInput.value.trim();
+    if (!query) { setScriptureAiStatus('Type what you remember about the verse first.', true); return; }
+    if (!bibleData) { setScriptureAiStatus('The Bible text is still loading.', true); return; }
+
+    el.scriptureAiBtn.disabled = true;
+    setScriptureAiStatus('Searching…');
+    aiGenerate(AI_TEXT_MODEL, {
+      contents: [{
+        parts: [{
+          text: 'You identify Bible verses from the King James Version. A church operator is looking for one ' +
+            'exact verse. They may give a phrase, a partial quote, a reference like "Esther 8:9", or describe ' +
+            'the story. Return the single best matching verse as JSON with the full KJV book name, chapter and ' +
+            'verse as integers. If only a book and chapter are given, choose verse 1. Query: ' + query
+        }]
+      }],
+      generationConfig: { responseMimeType: 'application/json', responseSchema: AI_VERSE_SCHEMA }
+    }).then(function (data) {
+      var text = aiFirstText(data);
+      var reference;
+      try { reference = JSON.parse(text); } catch (err) { reference = null; }
+      if (!reference || !reference.book) {
+        setScriptureAiStatus('The AI could not identify a verse from that. Try rephrasing.', true);
+        return;
+      }
+      applyFoundVerse(reference);
+    }).catch(function (err) {
+      setScriptureAiStatus('Verse search failed: ' + err.message, true);
+    }).finally(function () {
+      el.scriptureAiBtn.disabled = false;
+    });
+  }
+
+  el.scriptureAiBtn.addEventListener('click', searchVerseWithAi);
+  el.scriptureAiInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); searchVerseWithAi(); }
+  });
+
+  /* -- 9b(ii) Text polish ---------------------------------------------------
+     Tidies the typed text without changing its meaning. Em dashes are banned
+     outright (both the literal character and the "--" substitute) because they
+     read badly on the projection. */
+
+  function setTextPolishStatus(message, isError) {
+    el.textPolishStatus.textContent = message || '';
+    el.textPolishStatus.style.color = isError ? 'var(--sunrise-orange)' : '';
+  }
+
+  function stripEmDashes(text) {
+    return text
+      .replace(/\s*[\u2014\u2013]\s*/g, ', ')   // em dash / en dash → comma
+      .replace(/\s*--\s*/g, ', ')               // the typed "--" substitute
+      .replace(/,\s*,/g, ',')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function polishTextWithAi() {
+    var raw = el.textBodyInput.value.trim();
+    if (!raw) { setTextPolishStatus('Type some text first, then polish it.', true); return; }
+
+    el.textPolishBtn.disabled = true;
+    setTextPolishStatus('Polishing…');
+    aiGenerate(AI_TEXT_MODEL, {
+      contents: [{
+        parts: [{
+          text: 'Polish the following text for display on a church projection screen. Fix spelling, grammar ' +
+            'and punctuation, and make it read smoothly, but keep the meaning and the wording as close to the ' +
+            'original as possible. Do not add quotation marks or commentary. Do not use em dashes or en dashes ' +
+            'anywhere; use commas or full stops instead. Return only the polished text.\n\n' + raw
+        }]
+      }]
+    }).then(function (data) {
+      var polished = stripEmDashes(aiFirstText(data));
+      if (!polished) { setTextPolishStatus('The AI returned nothing to use.', true); return; }
+      el.textBodyInput.value = polished;
+      preview.text.body = polished;
+      afterPreviewChange();
+      setTextPolishStatus('Polished — review it, then Launch.');
+    }).catch(function (err) {
+      setTextPolishStatus('Polish failed: ' + err.message, true);
+    }).finally(function () {
+      el.textPolishBtn.disabled = false;
+    });
+  }
+
+  el.textPolishBtn.addEventListener('click', polishTextWithAi);
+
+  /* -- 9b(iii) AI image generation -----------------------------------------
+     Used both for the background photo and for the Media panel. The generated
+     image is stored through exactly the same paths as an uploaded file, so the
+     display cannot tell the difference. */
+
+  /** Prompts for an image and resolves with a Blob, or rejects. */
+  function generateImage(prompt) {
+    return aiGenerate(AI_IMAGE_MODEL, {
+      contents: [{ parts: [{ text: prompt + '. Do not include any text, letters or watermarks in the image.' }] }],
+      generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
+    }).then(function (data) {
+      var image = aiFirstImage(data);
+      if (!image) throw new Error('the AI did not return an image (this model may be out of quota)');
+      return aiImageBlob(image);
+    });
+  }
+
+  function setBgAiStatus(message, isError) {
+    el.bgAiStatus.textContent = message || '';
+    el.bgAiStatus.style.color = isError ? 'var(--sunrise-orange)' : '';
+  }
+
+  function generateBackgroundWithAi() {
+    var prompt = el.bgAiPrompt.value.trim();
+    if (!prompt) { setBgAiStatus('Describe the background you want first.', true); return; }
+
+    el.bgAiBtn.disabled = true;
+    setBgAiStatus('Generating…');
+    generateImage(prompt).then(function (blob) {
+      return bakeBackground(blob).then(function (buffer) {
+        if (buffer.byteLength > MAX_BG_BYTES) throw new Error('the generated image is too large');
+        return EWC.putBackgroundImage(buffer).then(function () {
+          send({ type: 'background', buffer: buffer });
+          if (previewReady && previewWindow) previewWindow.__ewcPreview.backgroundBuffer(buffer);
+        });
+      });
+    }).then(function () {
+      setBgAiStatus('Background generated and applied.');
+    }).catch(function (err) {
+      setBgAiStatus('Image generation failed: ' + err.message, true);
+    }).finally(function () {
+      el.bgAiBtn.disabled = false;
+    });
+  }
+
+  el.bgAiBtn.addEventListener('click', generateBackgroundWithAi);
+  el.bgAiPrompt.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); generateBackgroundWithAi(); }
+  });
+
+  function generateMediaWithAi() {
+    var prompt = el.mediaAiPrompt.value.trim();
+    if (!prompt) { setMediaStatus('Describe the image you want first.'); return; }
+
+    el.mediaAiBtn.disabled = true;
+    setMediaStatus('Generating an image…');
+    generateImage(prompt).then(function (blob) {
+      var name = 'AI image — ' + prompt.slice(0, 40);
+      return EWC.putForegroundMedia({ kind: 'image', mime: blob.type || 'image/png', name: name, blob: blob })
+        .then(function () {
+          preview.media = { kind: 'image', mime: blob.type || 'image/png', name: name };
+          setMediaStatus('Generated — press Launch to show it.');
+          setMode('media');
+        });
+    }).catch(function (err) {
+      setMediaStatus('Image generation failed: ' + err.message);
+    }).finally(function () {
+      el.mediaAiBtn.disabled = false;
+    });
+  }
+
+  el.mediaAiBtn.addEventListener('click', generateMediaWithAi);
+  el.mediaAiPrompt.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); generateMediaWithAi(); }
   });
 
   /* ==========================================================================
@@ -880,6 +1274,39 @@
   });
 
   /* --------------------------------------------------------------------------
+     YouTube embed
+
+     A pasted YouTube link becomes a descriptor that carries only the video id,
+     so nothing large crosses the bus — the display builds the embed itself.
+     Accepts the usual shapes: watch?v=, youtu.be/, /embed/, /shorts/, /live/.
+     -------------------------------------------------------------------------- */
+
+  /** Extracts an 11-character YouTube video id from a pasted URL, or null. */
+  function parseYouTubeId(url) {
+    if (!url) return null;
+    var match = String(url).trim().match(
+      /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/|v\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+    if (match) return match[1];
+    // A bare id is accepted too, so the operator can paste just the code.
+    return /^[A-Za-z0-9_-]{11}$/.test(String(url).trim()) ? String(url).trim() : null;
+  }
+
+  el.mediaYoutubeBtn.addEventListener('click', function () {
+    var id = parseYouTubeId(el.mediaYoutubeInput.value);
+    if (!id) { setMediaStatus('That does not look like a YouTube link.'); return; }
+    // YouTube is streamed by the display from the id, so no bytes are stored.
+    EWC.putForegroundMedia(null).catch(function () {});
+    preview.media = { kind: 'youtube', id: id, name: 'YouTube video' };
+    el.mediaYoutubeInput.value = '';
+    setMediaStatus('YouTube video ready — press Launch to play it.');
+    setMode('media');
+  });
+
+  el.mediaYoutubeInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); el.mediaYoutubeBtn.click(); }
+  });
+
+  /* --------------------------------------------------------------------------
      Camera picker
 
      A machine can have several cameras (a built-in webcam, a USB capture card,
@@ -1010,6 +1437,46 @@
 
   el.cameraStopBtn.addEventListener('click', function () { setMode('timer'); });
 
+  /* --------------------------------------------------------------------------
+     Webpage panel
+
+     The operator types a URL and the display frames it inside the glass panel.
+     Only the URL crosses the bus. A page that forbids framing (an
+     X-Frame-Options / frame-ancestors header) cannot be shown and will stay
+     blank; the hint in the console says so.
+     -------------------------------------------------------------------------- */
+
+  function setWebpageStatus(message, isError) {
+    el.webpageStatus.textContent = message || '';
+    el.webpageStatus.style.color = isError ? 'var(--sunrise-orange)' : '';
+  }
+
+  /** Adds a scheme to a bare host and rejects anything that is not http(s). */
+  function normalizeWebpageUrl(raw) {
+    var url = String(raw || '').trim();
+    if (!url) return null;
+    if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+    try {
+      var parsed = new URL(url);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+      return parsed.href;
+    } catch (err) { return null; }
+  }
+
+  function loadWebpage() {
+    var url = normalizeWebpageUrl(el.webpageUrlInput.value);
+    if (!url) { setWebpageStatus('Enter a web address like https://example.com', true); return; }
+    el.webpageUrlInput.value = url;
+    preview.webpageUrl = url;
+    setWebpageStatus('Loaded into the preview — press Launch to show it. If it stays blank, that site blocks embedding.');
+    setMode('webpage');
+  }
+
+  el.webpageGoBtn.addEventListener('click', loadWebpage);
+  el.webpageUrlInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); loadWebpage(); }
+  });
+
   /* ==========================================================================
      12. MODE SWITCHING + TIMER FIELDS
      ========================================================================== */
@@ -1019,7 +1486,7 @@
 
     // Only the chosen panel's own controls are shown — no hunting down a long
     // rail for the fields that happen to matter right now.
-    ['timer', 'clock', 'scripture', 'lyrics', 'text', 'media', 'camera'].forEach(function (m) {
+    ['timer', 'clock', 'scripture', 'lyrics', 'text', 'media', 'camera', 'webpage'].forEach(function (m) {
       var group = document.getElementById(m + '-fields');
       if (group) group.hidden = m !== mode;
     });
@@ -1127,6 +1594,10 @@
     if (preview.media && preview.media.name) {
       setMediaStatus('Ready — press Launch to show ' + preview.media.name + '.');
     }
+    if (preview.webpageUrl) el.webpageUrlInput.value = preview.webpageUrl;
+
+    // Report the saved AI key (masked) and whether the features are on.
+    reflectAiKey();
 
     // Read the camera list up front so the picker is ready the moment the
     // operator switches to Camera. Permission is only requested when they

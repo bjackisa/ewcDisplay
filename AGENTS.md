@@ -50,10 +50,10 @@ live as well (it is scenery, not content).
 ## The panel
 
 The console has a **mode picker** (`#mode-toggle-group`) naming what goes on
-the glass panel: timer, clock, scripture, lyrics, text, media, camera. Only the
-chosen mode's own fields are shown: `#mode-fields` holds one `#<mode>-fields`
-block per mode and `setMode()` hides all but the chosen one, so the operator
-sees one mode's controls rather than every control at once.
+the glass panel: timer, clock, scripture, lyrics, text, media, camera, webpage.
+Only the chosen mode's own fields are shown: `#mode-fields` holds one
+`#<mode>-fields` block per mode and `setMode()` hides all but the chosen one, so
+the operator sees one mode's controls rather than every control at once.
 
 The picker is **not in the rail**. It is a full-width `.console__modes` bar
 along the bottom edge of the window, a sibling of the rail/preview row. Seven
@@ -66,8 +66,9 @@ scrolled to.
 | --- | --- |
 | Timer / Clock / Scripture / Lyrics | the mode's own glass panel |
 | Text | `#text-view` — a typed quote, dressed like scripture |
-| Media | `#media-view` — a photo, video, GIF or audio file |
+| Media | `#media-view` — a photo, video, GIF, audio file, or a YouTube embed |
 | Camera | `#camera-view` — the display device's own live feed |
+| Webpage | `#webpage-view` — an external page framed by the panel (`#webpage-frame`) |
 | No Panel (`#no-panel-toggle`) | the glass is removed; background alone (body gets `.no-panel`) |
 
 Media bytes are never sent over the bus. The console writes the file into the
@@ -92,6 +93,40 @@ reopens the right camera.
 Text and media are *modes*, not a separate foreground layer: they render inside
 the same glass panel, so nothing competes with the background. The panel only
 disappears for "No Panel".
+
+**AI (Gemini).** One Google Gemini key, entered in the console's **AI settings**
+(`#ai-key-input`) and kept in `localStorage` under `ewc-display-gemini-key-v1`,
+powers three things, all in the console:
+- **Verse search** (`#scripture-ai-input` / `#scripture-ai-btn`): the operator
+  types anything they remember and Gemini resolves a book/chapter/verse via a
+  `responseSchema`-constrained call. The resolved reference is then loaded from
+  the *local* KJV text (`findBookIndex` + `applyFoundVerse`), so the screen gets
+  the same KJV string every other verse uses, never text the model retyped. It
+  lands in the preview and stays launch-gated like any new reference.
+- **Text polish** (`#text-polish-btn`, the ✦ by the textarea): rewrites the
+  typed text. Em/en dashes and `--` are stripped afterwards in `stripEmDashes`,
+  because the prompt alone is not a guarantee.
+- **Image generation** (`#bg-ai-btn`, `#media-ai-btn`): generates an image and
+  feeds it through the *same* store path as an uploaded file (`bakeBackground` +
+  `putBackgroundImage`, or `putForegroundMedia`), so the display cannot tell the
+  difference.
+
+All three go through `aiGenerate()`, which retries 500/503/504 and network
+failures (the free endpoint throws "high demand" 503s often) and turns a 429
+into a plain "out of quota" message. AI is never required: with no key every
+button just says so.
+
+**YouTube.** Pasting a link (`#media-youtube-btn`, parsed by `parseYouTubeId`)
+sets a `{kind:'youtube', id}` descriptor. No bytes are stored or sent — the
+display builds a `youtube-nocookie.com/embed/<id>` iframe in `mountYouTube`.
+The media-key comparison in `applyMode()` still stops a silent re-push from
+reloading it.
+
+**Webpage.** `#webpage-url-input` / `#webpage-go-btn` normalizes to http(s) and
+sends only the URL; the display frames it in `#webpage-frame`. A site that sends
+`X-Frame-Options`/`frame-ancestors` cannot be framed and stays blank — there is
+no reliable way to detect that, so the console hint says so instead. The iframe
+is only re-pointed when the URL changes, so a verse step does not reload it.
 
 ## File map
 
@@ -161,6 +196,14 @@ disappears for "No Panel".
   against. `fitToPanel()` measures the panel's *content box* (minus padding and
   any sibling reference/title line) and binary-searches the largest font that
   fits, with `overflow:hidden` as the final backstop.
+- **The fitter must count margins, not just `offsetHeight`.** The panel's
+  children are `<p>` elements and there is no `p{margin:0}` reset, so each keeps
+  the browser's default `1em` top/bottom margin. `offsetHeight` excludes
+  margins, so summing it under-measured the stack by ~130px on a long verse: the
+  fitter believed the verse fit while the reference below it had been pushed
+  past the panel's `overflow:hidden` edge and vanished. `outerHeight()` adds the
+  margins back; `.scripture-reference` / `.text-title` also carry `flex:none` so
+  they can never be the flex item that gets squeezed off instead.
 - **`.text-body`/`.scripture-text` need `min-width:0` + `overflow-wrap:anywhere`.**
   As flex items their min-content width is the longest word, so without both a
   stray long token widens the panel past the stage instead of wrapping.
@@ -198,6 +241,7 @@ pip install playwright && playwright install chromium
 python3 tests/test_console_display.py   # the console/display split
 python3 tests/test_persistence.py       # backdrop + song persistence
 python3 tests/test_display_features.py  # type sizes + the panel modes
+python3 tests/test_ai_and_embeds.py     # AI, YouTube and the webpage panel
 ```
 
 They cover: page errors, absence of controls on the display, launch vs preview
@@ -208,3 +252,9 @@ the enlarged lyrics/scripture/clock/timer type, scripture/text never spilling
 off the stage, per-mode control visibility, the camera picker (single camera
 auto-selected, several cameras offered, the chosen id sent to the display), and
 every panel mode (media, camera, text, No Panel, plus editing a song's lyrics).
+
+`test_ai_and_embeds.py` stubs the Gemini endpoint with `page.route()` (so the
+real request/response handling runs with no key or network) and checks the
+longest-verse reference visibility, AI verse search (previewed, launch-gated),
+the text polish (and its no-em-dash rule), AI images for the background and the
+media panel, YouTube embedding, and the webpage panel.

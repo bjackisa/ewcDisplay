@@ -327,6 +327,10 @@
 </div>
 
 <script src="display-common.js"></script>
+<!-- mp4-muxer (vendored, MIT): the recorder muxes WebCodecs-encoded video into
+     a proper MP4 with a seekable sample index, which MediaRecorder cannot
+     produce. Vendored so recording works with no network. -->
+<script src="vendor/mp4-muxer.js"></script>
 <script src="console.js"></script>
 </body>
 </html>

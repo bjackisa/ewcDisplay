@@ -19,6 +19,8 @@
      the framed page on the live display.</p>
   <button id="counter" type="button">Clicked 0 times</button>
   <p id="status">not clicked yet</p>
+  <button id="pointer-target" type="button">Pointer down 0 times</button>
+  <p id="pointer-status">no pointer yet</p>
   <div id="tall"></div>
   <p id="bottom">You reached the bottom.</p>
   <script>
@@ -27,6 +29,15 @@
       n += 1;
       this.textContent = 'Clicked ' + n + ' times';
       document.getElementById('status').textContent = 'clicked ' + n + ' times';
+    });
+    // Real apps act on pointerdown/mousedown, not just click. Count those too,
+    // so the test can prove the console relays the whole pointer sequence.
+    var p = 0;
+    var target = document.getElementById('pointer-target');
+    target.addEventListener('pointerdown', function () {
+      p += 1;
+      this.textContent = 'Pointer down ' + p + ' times';
+      document.getElementById('pointer-status').textContent = 'pointerdown ' + p;
     });
   </script>
 </body>

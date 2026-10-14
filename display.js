@@ -763,13 +763,25 @@
     el.webpageStatus.hidden = true;
   }
 
-  /** Applies a scroll or click the operator made over the console's preview,
-   *  to the page framed here. Scroll deltas arrive as a fraction of the frame
-   *  so the same message moves both screens by the same visual amount; a click
-   *  arrives as the element's path from the page root, so it lands on the same
-   *  element even though the preview and the projection size the panel
-   *  differently. The framed page is same-origin (the proxy served it), so it
-   *  can be driven directly. */
+  /** Walks a child-index path (as sent by the console) down from the framed
+   *  page's root to the element it names. */
+  function nodeAtPath(root, path) {
+    var node = root;
+    path = path || [];
+    for (var i = 0; i < path.length && node; i++) node = node.children[path[i]];
+    return node;
+  }
+
+  /** Replays one console-preview interaction on the page framed here.
+   *
+   *  Scroll deltas arrive as a fraction of the frame so the same message moves
+   *  both screens by the same visual amount. Pointer events (down/up/move/
+   *  click) arrive as the element's path from the page root — never a screen
+   *  position, because the preview and the projection size the panel
+   *  differently — and are re-dispatched as real PointerEvent/MouseEvent pairs
+   *  so menus, drag handles and hover styles all see them, not just a bare
+   *  click. The framed page is same-origin (the proxy served it), so it can be
+   *  driven directly. */
   function webpageControl(message) {
     var frame = el.webpageFrame;
     if (!frame || !frame.contentWindow || !frame.contentDocument) return;
@@ -784,21 +796,32 @@
       return;
     }
 
-    if (message.action === 'click') {
-      // The console sends the clicked element as a child-index path from the
-      // page root, having identified it in its own copy of the same-origin
-      // page. Replay it here rather than mapping a screen position, because
-      // the preview and the projection lay the panel out at different sizes —
-      // a point that hits the button in the preview can miss it on the glass.
-      var node = frame.contentDocument;
-      var path = message.path || [];
-      for (var i = 0; i < path.length && node; i++) {
-        node = node.children[path[i]];
+    var node = nodeAtPath(frame.contentDocument, message.path);
+    if (!node || node.nodeType !== 1) return;
+    var win = frame.contentWindow;
+    var rect = node.getBoundingClientRect();
+    var cx = rect.left + rect.width / 2;
+    var cy = rect.top + rect.height / 2;
+    var opts = {
+      bubbles: true, cancelable: true, composed: true, view: win,
+      clientX: cx, clientY: cy, button: message.button || 0,
+      buttons: message.action === 'pointerdown' ? 1 : 0,
+      pointerId: 1, pointerType: 'mouse', isPrimary: true
+    };
+    try {
+      if (message.action === 'pointermove') {
+        node.dispatchEvent(new PointerEvent('pointermove', opts));
+        node.dispatchEvent(new MouseEvent('mousemove', opts));
+      } else if (message.action === 'pointerdown') {
+        node.dispatchEvent(new PointerEvent('pointerdown', opts));
+        node.dispatchEvent(new MouseEvent('mousedown', opts));
+      } else if (message.action === 'pointerup') {
+        node.dispatchEvent(new PointerEvent('pointerup', opts));
+        node.dispatchEvent(new MouseEvent('mouseup', opts));
+      } else if (message.action === 'click') {
+        node.dispatchEvent(new MouseEvent('click', opts));
       }
-      try {
-        if (node && typeof node.click === 'function') node.click();
-      } catch (err) { /* detached node, or a navigation raced the click */ }
-    }
+    } catch (err) { /* detached node, or a navigation raced the event */ }
   }
 
   /** Shows the typed text: body in the scripture-text style, title in the

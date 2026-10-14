@@ -191,6 +191,31 @@ def main():
                   disp.evaluate("document.getElementById('webpage-frame').contentDocument"
                                 ".getElementById('counter').textContent"))
 
+            # A page that acts on pointerdown, not click (menus, drag handles,
+            # most real apps) must see the relayed pointer sequence too.
+            con.evaluate("document.getElementById('preview').contentDocument"
+                         ".getElementById('webpage-frame').contentWindow.scrollTo(0, 0)")
+            disp.evaluate("document.getElementById('webpage-frame').contentWindow.scrollTo(0, 0)")
+            con.wait_for_timeout(300)
+            pgeom = con.evaluate("""(function(){
+              var d = document.getElementById('preview').contentDocument;
+              var fr = d.getElementById('webpage-frame');
+              var b = fr.contentDocument.getElementById('pointer-target').getBoundingClientRect();
+              var sr = d.getElementById('stage').getBoundingClientRect();
+              var frr = fr.getBoundingClientRect();
+              var ir = document.getElementById('preview').getBoundingClientRect();
+              var nx = (frr.left - sr.left + (b.x + b.width / 2) / fr.clientWidth * frr.width) / sr.width;
+              var ny = (frr.top - sr.top + (b.y + b.height / 2) / fr.clientHeight * frr.height) / sr.height;
+              return { cx: ir.x + nx * ir.width, cy: ir.y + ny * ir.height };
+            })()""")
+            con.mouse.click(pgeom["cx"], pgeom["cy"])
+            con.wait_for_timeout(400)
+            check("a pointerdown on the preview reaches the live page",
+                  "pointerdown 1" in disp.evaluate("document.getElementById('webpage-frame')"
+                                                   ".contentDocument.getElementById('pointer-status').textContent"),
+                  disp.evaluate("document.getElementById('webpage-frame').contentDocument"
+                                ".getElementById('pointer-status').textContent"))
+
             # ---------- the sheet disarms when the preview drifts -----------
             con.click('button[data-mode="timer"]')
             con.wait_for_timeout(200)
@@ -260,6 +285,35 @@ def main():
               return await first(root);
             }""")
             check("the file is a real MP4 (ftyp box)", "66 74 79 70" in head, head)
+
+            # The file must be a *seekable* MP4: a real duration and a seekable
+            # range, not the durationless fragmented MP4 MediaRecorder writes.
+            seek = con.evaluate("""async () => {
+              const root = await navigator.storage.getDirectory();
+              async function mp4(dir){
+                for await (const [name, h] of dir.entries()){
+                  if (h.kind === 'directory'){ const r = await mp4(h); if (r) return r; }
+                  else if (name.endsWith('.mp4')) { return await h.getFile(); }
+                }
+                return null;
+              }
+              const f = await mp4(root);
+              const v = document.createElement('video');
+              v.src = URL.createObjectURL(f);
+              await new Promise(r=>{v.onloadedmetadata=r;v.onerror=r;setTimeout(r,4000);});
+              const out = {duration: v.duration,
+                           seekable: v.seekable.length ? v.seekable.end(0) : 0,
+                           err: v.error && v.error.message};
+              try { v.currentTime = Math.max(0, (v.duration || 2) - 0.5);
+                    await new Promise(r=>{v.onseeked=r;setTimeout(r,1500);});
+                    out.seekedTo = v.currentTime; }
+              catch(e){ out.seekedTo = 'err'; }
+              return out;
+            }""")
+            check("the recorded MP4 has a real duration and is seekable",
+                  seek["duration"] > 0 and seek["seekable"] > 0 and not seek["err"]
+                  and isinstance(seek["seekedTo"], (int, float)),
+                  seek)
 
             # The display must never show any recording chrome.
             check("nothing about recording appears on the live display",

@@ -1561,9 +1561,9 @@
   /** The element under the operator's pointer inside the preview's framed
    *  page, as a path from the page's root. The proxied page is same-origin, so
    *  the console can identify the exact element; sending that path rather than
-   *  a screen position means the click lands on the same element even though
+   *  a screen position means the event lands on the same element even though
    *  the preview and the projection size the panel differently. */
-  function previewFramePath(clientX, clientY) {
+  function previewFrameHit(clientX, clientY) {
     if (!previewFrame.contentDocument) return null;
     // The event is in the console's coordinates; the preview's own document is
     // a separate coordinate system, so translate across the iframe boundary
@@ -1589,11 +1589,38 @@
     return path.length ? path : null;
   }
 
-  el.previewProxy.addEventListener('click', function (e) {
+  /* A real page reacts to more than a click: menus open on pointerdown, drag
+     handles listen for mousedown, hover styles track pointermove. So the sheet
+     relays the whole pointer sequence — down, up and move — each addressed to
+     the element under the pointer, rather than a lone synthetic click that
+     only the simplest buttons would notice. */
+  function relayPointer(action, e) {
     if (!previewCanDriveWebpage()) return;
-    var path = previewFramePath(e.clientX, e.clientY);
+    var path = previewFrameHit(e.clientX, e.clientY);
     if (!path) return;
-    sendWebpageControl({ action: 'click', path: path });
+    sendWebpageControl({ action: action, path: path, button: e.button || 0 });
+  }
+
+  el.previewProxy.addEventListener('pointerdown', function (e) { relayPointer('pointerdown', e); });
+  el.previewProxy.addEventListener('pointerup', function (e) { relayPointer('pointerup', e); });
+  el.previewProxy.addEventListener('click', function (e) { relayPointer('click', e); });
+
+  // Hover moves arrive in a torrent; coalesce them to one relay per frame so
+  // the bus carries the position, not every intermediate sample.
+  var hoverFrame = null;
+  var hoverPoint = null;
+  el.previewProxy.addEventListener('pointermove', function (e) {
+    if (!previewCanDriveWebpage()) return;
+    hoverPoint = { x: e.clientX, y: e.clientY };
+    if (hoverFrame) return;
+    hoverFrame = requestAnimationFrame(function () {
+      hoverFrame = null;
+      var p = hoverPoint;
+      if (!p || !previewCanDriveWebpage()) return;
+      var path = previewFrameHit(p.x, p.y);
+      if (!path) return;
+      sendWebpageControl({ action: 'pointermove', path: path });
+    });
   });
 
   /* ==========================================================================
@@ -1692,12 +1719,9 @@
      pause/resume/stop controls live on the console only.
      ========================================================================== */
 
-  /* Candidate MP4 types, best first. A browser that ships the H.264/AAC
-     encoders records true MP4; one that does not (Chrome/Chromium builds
-     without proprietary codecs) can still write an MP4 container holding
-     VP9 + Opus. Either way the file the operator gets ends in .mp4. If a
-     browser can write no MP4 at all, WebM is the last resort and the console
-     says so rather than writing a file the wrong extension. */
+  /* MediaRecorder fallback types, best first. This path is only taken when
+     the browser has no WebCodecs encoder to build a proper MP4 with; it writes
+     a fragmented MP4 (or WebM) that many players cannot seek. */
   var RECORD_CANDIDATES = [
     { mime: 'video/mp4;codecs=avc1.42E01E,mp4a.40.2', ext: 'mp4' },
     { mime: 'video/mp4;codecs=avc1.4d002a,mp4a.40.2', ext: 'mp4' },
@@ -1706,6 +1730,19 @@
     { mime: 'video/mp4', ext: 'mp4' },
     { mime: 'video/webm;codecs=vp9,opus', ext: 'webm' },
     { mime: 'video/webm', ext: 'webm' }
+  ];
+
+  /* WebCodecs video codecs, best first. H.264/AAC is the universally playable
+     pairing; VP9 is the open-codec stand-in in Chromium builds that lack the
+     H.264 encoder (both mux into a standards-compliant MP4). */
+  var WC_VIDEO_CODECS = [
+    { codec: 'avc1.42E01E', muxer: 'avc' },
+    { codec: 'avc1.4d002a', muxer: 'avc' },
+    { codec: 'vp09.00.10.08', muxer: 'vp9' }
+  ];
+  var WC_AUDIO_CODECS = [
+    { codec: 'mp4a.40.2', muxer: 'aac' },
+    { codec: 'opus', muxer: 'opus' }
   ];
 
   // Bits per second used to estimate the file size, hence how long the drive
@@ -1741,7 +1778,8 @@
     return Math.max(1, Math.round(bytes / 1024)) + ' KB';
   }
 
-  /** The first recorder type this browser can actually write. */
+  /** The first MediaRecorder type this browser can write, used only when
+   *  WebCodecs is unavailable. */
   function pickRecorderType() {
     if (typeof MediaRecorder === 'undefined') return null;
     for (var i = 0; i < RECORD_CANDIDATES.length; i += 1) {
@@ -1751,6 +1789,93 @@
       } catch (err) { /* some builds throw instead of answering */ }
     }
     return null;
+  }
+
+  function canUseWebCodecs() {
+    return typeof window.VideoEncoder === 'function' &&
+      typeof window.AudioEncoder === 'function' &&
+      typeof window.MediaStreamTrackProcessor === 'function' &&
+      typeof window.VideoFrame === 'function' &&
+      typeof window.Mp4Muxer === 'object';
+  }
+
+  /** True when every candidate resolves to something this browser can encode.
+   *  Used to tell "the browser has no H.264 encoder" from "there is no encoder
+   *  at all", so the operator gets a useful note rather than a bare failure. */
+  function webCodecsUnavailableError() {
+    var e = new Error('This browser has no usable video encoder for recording.');
+    e.name = 'NotSupportedError';
+    return e;
+  }
+
+  /** Picks the capture size and frame rate, kept even for the encoder. */
+  function pickVideoConfig(track) {
+    var settings = (track && track.getSettings) ? track.getSettings() : {};
+    var width = settings.width || 1280;
+    var height = settings.height || 720;
+    var frameRate = Math.min(30, Math.round(settings.frameRate || 30));
+    // Encoders dislike odd dimensions; keep the capture's aspect but even.
+    width -= width % 2;
+    height -= height % 2;
+    return { width: width, height: height, frameRate: frameRate };
+  }
+
+  /** Picks a video encoder + muxer codec pair the browser supports, together
+   *  with the capture size. H.264 is preferred where present; VP9 is the
+   *  fallback, and both mux into a standard MP4. */
+  function chooseWebCodecsConfig(track) {
+    if (typeof window.VideoEncoder === 'undefined' || typeof window.VideoEncoder.isConfigSupported !== 'function') {
+      return Promise.reject(webCodecsUnavailableError());
+    }
+    var size = pickVideoConfig(track);
+    var attempts = WC_VIDEO_CODECS.map(function (video) {
+      return VideoEncoder.isConfigSupported({
+        codec: video.codec,
+        width: size.width,
+        height: size.height,
+        bitrate: REC_VIDEO_BPS,
+        framerate: size.frameRate
+      }).then(function (res) {
+        return res && res.supported ? { video: video, config: res.config } : null;
+      }).catch(function () { return null; });
+    });
+    return Promise.all(attempts).then(function (results) {
+      var found = null;
+      for (var i = 0; i < results.length; i += 1) { if (results[i]) { found = results[i]; break; } }
+      if (!found) throw webCodecsUnavailableError();
+      found.width = size.width;
+      found.height = size.height;
+      found.frameRate = size.frameRate;
+      return found;
+    });
+  }
+
+  /** A usable audio encoder + muxer codec pair, or null for a silent
+   *  recording. The channel count and sample rate are taken from the captured
+   *  track: an encoder configured for more channels than the AudioData carries
+   *  refuses every buffer ("incompatible with codec parameters"), which would
+   *  leave a silent audio track. Never rejects: losing the audio must not lose
+   *  the video. */
+  function chooseAudioCodec(track) {
+    if (typeof window.AudioEncoder === 'undefined' || typeof window.AudioEncoder.isConfigSupported !== 'function') {
+      return Promise.resolve(null);
+    }
+    var settings = (track && track.getSettings) ? track.getSettings() : {};
+    var channels = settings.channelCount || 2;
+    var sampleRate = settings.sampleRate || 48000;
+    var attempts = WC_AUDIO_CODECS.map(function (audio) {
+      return AudioEncoder.isConfigSupported({
+        codec: audio.codec, sampleRate: sampleRate, numberOfChannels: channels, bitrate: 128000
+      }).then(function (res) {
+        return res && res.supported
+          ? { audio: audio, config: res.config, channels: channels, sampleRate: sampleRate }
+          : null;
+      }).catch(function () { return null; });
+    });
+    return Promise.all(attempts).then(function (results) {
+      for (var i = 0; i < results.length; i += 1) { if (results[i]) return results[i]; }
+      return null;
+    });
   }
 
   /** "DD-MM-YYYY-abcde" — the day the recording started, plus five random
@@ -1843,8 +1968,15 @@
 
   function recordFailure(err) {
     stopRecTicker();
-    if (rec && rec.recorder && rec.recorder.state !== 'inactive') {
+    if (rec && rec.mode === 'mediarecorder' && rec.recorder && rec.recorder.state !== 'inactive') {
       try { rec.recorder.stop(); } catch (stopErr) { /* already gone */ }
+    }
+    if (rec && rec.mode === 'webcodecs') {
+      // Release the encoders and the file rather than leaving them half-open.
+      [rec.videoEncoder, rec.audioEncoder].forEach(function (enc) {
+        if (enc && enc.state !== 'closed') { try { enc.close(); } catch (e) {} }
+      });
+      if (rec.writer) { try { rec.writer.close(); } catch (e) {} }
     }
     if (rec && rec.stream) rec.stream.getTracks().forEach(function (t) { t.stop(); });
     var name = err && err.name;
@@ -1874,27 +2006,42 @@
         'Edge on a desktop. (Safari and Firefox can play the display but cannot record it to a folder.)', true);
       return;
     }
-    var type = pickRecorderType();
-    if (!type) { setRecStatus('This browser cannot record video at all.', true); return; }
+    // WebCodecs lets us write a *proper* MP4: a single moov with a real
+    // duration and a sample index, which every player can seek. MediaRecorder
+    // (the fallback) writes a live fragmented MP4 that many players refuse to
+    // seek. Prefer the former wherever the browser can do it.
+    var useWebCodecs = canUseWebCodecs();
+    if (!useWebCodecs && !pickRecorderType()) {
+      setRecStatus('This browser cannot record video at all.', true);
+      return;
+    }
 
     // Both the folder picker and the screen picker need a user gesture. Ask
     // for the folder first — that is the choice the operator made — then for
     // the screen. A rejection at either step cancels cleanly.
     window.showDirectoryPicker({ mode: 'readwrite', id: 'ewc-display-recordings' })
-      .then(function (dir) { return openRecording(dir, type); })
+      .then(function (dir) { return openRecording(dir, useWebCodecs); })
       .catch(recordFailure);
   }
 
-  function openRecording(dir, type) {
+  function openRecording(dir, useWebCodecs) {
     var startedAt = new Date();
     var run = {
-      type: type, startedAt: startedAt,
+      startedAt: startedAt,
       folderName: recordingFolderName(startedAt),
-      fileName: recordingFileName(startedAt, type.ext),
-      dir: dir, folder: null, persistedBytes: 0, chunks: [], written: 0,
+      fileName: recordingFileName(startedAt, 'mp4'),
+      dir: dir, folder: null, written: 0,
       freeBytes: null, pausedTotal: 0, pausedAt: null, state: 'starting',
-      stream: null, recorder: null, tick: null, note: '',
-      stopRequested: false, finished: false, flushPromise: null
+      stream: null, tick: null, note: '',
+      stopRequested: false, finished: false,
+      mode: useWebCodecs ? 'webcodecs' : 'mediarecorder',
+      // WebCodecs pipeline
+      muxer: null, writer: null, videoEncoder: null, audioEncoder: null,
+      videoReader: null, audioReader: null, videoDone: null, audioDone: null,
+      hasAudio: false, pausedMicros: 0, pauseWallAt: null, forceKeyFrame: false,
+      lastVideoTs: -1, lastAudioTs: -1,
+      // MediaRecorder fallback
+      type: null, recorder: null, chunks: [], persistedBytes: 0, flushPromise: null
     };
     rec = run;
 
@@ -1918,33 +2065,242 @@
       .then(function (stream) {
         if (!rec) { stream.getTracks().forEach(function (t) { t.stop(); }); return; }
         run.stream = stream;
-        run.recorder = new MediaRecorder(stream, {
-          mimeType: type.mime,
-          videoBitsPerSecond: REC_VIDEO_BPS,
-          audioBitsPerSecond: REC_AUDIO_BPS
-        });
-        run.recorder.ondataavailable = onRecData;
-        run.recorder.onerror = function (e) { recordFailure(e.error || e); };
-        run.recorder.onstop = onRecStop;
         // The operator can also stop sharing from the browser's own bar; that
         // ends the recording exactly as the Stop button does.
         stream.getVideoTracks().forEach(function (track) {
           track.addEventListener('ended', function () { if (rec) stopRecording(); });
         });
-        // 2s slices: small enough to land on disk steadily, large enough not
-        // to grind. Each one is written to the file as it arrives (see
-        // onRecData), so a long service never piles up in memory.
-        run.recorder.start(2000);
-        run.state = 'recording';
-        run.note = 'Recording the live display. Keep this console window open, and do not close the browser.';
-        el.recWhere.textContent = run.folderName + '/' + run.fileName;
-        setRecTransport('recording');
-        setRecordButton(true, false);
-        setRecStatus(run.note);
-        startRecTicker();
-        refreshFreeSpace();
+        return beginCapture(run);
       })
       .catch(recordFailure);
+  }
+
+  /** Starts whichever pipeline the run was set up for. If WebCodecs turns out
+   *  to have no usable encoder after all, fall back to MediaRecorder on the
+   *  same stream rather than failing the recording outright. */
+  function beginCapture(run) {
+    if (run.mode !== 'webcodecs') return startMediaRecorder(run);
+    return startWebCodecs(run).catch(function (err) {
+      if (rec !== run || run.started) throw err;
+      return startMediaRecorder(run);
+    });
+  }
+
+  function markRecordingStarted(run, note) {
+    run.state = 'recording';
+    run.started = true;
+    run.note = note;
+    el.recWhere.textContent = run.folderName + '/' + run.fileName;
+    setRecTransport('recording');
+    setRecordButton(true, false);
+    setRecStatus(note);
+    startRecTicker();
+    refreshFreeSpace();
+  }
+
+  /* ---------------------------------------------------------------- WebCodecs
+
+     The screen's video and audio frames are pulled with
+     MediaStreamTrackProcessor and fed to a VideoEncoder / AudioEncoder. The
+     encoded chunks are muxed into a plain MP4 with mp4-muxer, which writes a
+     single moov carrying the real duration and the full sample table — the
+     seekable file MediaRecorder cannot produce. Slices are flushed to the
+     chosen folder as they are made, so memory stays flat for a long service. */
+
+  function startWebCodecs(run) {
+    var videoTrack = run.stream.getVideoTracks()[0];
+    if (!videoTrack) throw webCodecsUnavailableError();
+    return chooseWebCodecsConfig(videoTrack).then(function (cfg) {
+      if (rec !== run) return;
+      return chooseAudioCodec(run.stream.getAudioTracks()[0]).then(function (audioChoice) {
+        if (rec !== run) return;
+        return buildWebCodecsPipeline(run, cfg, audioChoice);
+      });
+    });
+  }
+
+  function buildWebCodecsPipeline(run, cfg, audioChoice) {
+    var audioTrack = run.stream.getAudioTracks()[0];
+    if (!audioChoice || !audioTrack) audioChoice = null;
+
+    var video = { codec: cfg.video.muxer, width: cfg.width, height: cfg.height, frameRate: cfg.frameRate };
+    var audio = audioChoice
+      ? { codec: audioChoice.audio.muxer, numberOfChannels: audioChoice.channels, sampleRate: audioChoice.sampleRate }
+      : undefined;
+
+    return run.folder.getFileHandle(run.fileName, { create: true })
+      .then(function (handle) { return handle.createWritable(); })
+      .then(function (writable) {
+        if (rec !== run) { try { writable.close(); } catch (e) {} return; }
+        run.writer = writable;
+        run.muxer = new window.Mp4Muxer.Muxer({
+          target: new window.Mp4Muxer.FileSystemWritableFileStreamTarget(writable, { chunkSize: 8 * 1024 * 1024 }),
+          video: video,
+          audio: audio,
+          // A plain (non-fragmented) MP4 with the sample index in one moov.
+          // MediaRecorder's fragments have no duration and no seek index, which
+          // is why players refused to scrub. The moov is written at the end
+          // here: every slice streams to the chosen folder as it is made, so a
+          // two-hour service never piles up in memory, and a local player reads
+          // the moov from the end of the file to seek.
+          fastStart: false,
+          // Each track is offset independently so its own first sample is zero.
+          // The screen's video timestamps and the audio's come from different
+          // clocks, so a shared (cross-track) offset would yank one track's
+          // second sample seconds away from its first and stretch the file.
+          firstTimestampBehavior: 'offset'
+        });
+
+        run.videoEncoder = new VideoEncoder({
+          output: function (chunk, meta) { onWebCodecsChunk(run, chunk, meta, true); },
+          error: function (e) { recordFailure(e); }
+        });
+        run.videoEncoder.configure(cfg.config);
+
+        if (audio) {
+          run.audioEncoder = new AudioEncoder({
+            output: function (chunk, meta) { onWebCodecsChunk(run, chunk, meta, false); },
+            // An audio glitch must never take the video down with it.
+            error: function () { run.hasAudio = false; }
+          });
+          run.audioEncoder.configure(audioChoice.config);
+          run.hasAudio = true;
+        }
+
+        startCapturePumps(run);
+        markRecordingStarted(run, 'Recording the live display. Keep this console window open, and do not close the browser.');
+      });
+  }
+
+  function onWebCodecsChunk(run, chunk, meta, isVideo) {
+    if (!run.muxer) return;
+    // Rebase against the wall-clock time spent paused, so the file has no gap.
+    // The encoder re-times its output, so the chunk's own timestamp is already
+    // monotonic in the capture clock and needs no input-to-output lookup.
+    var rebased = chunk.timestamp - run.pausedMicros;
+    // A chunk the encoder buffered before a pause can surface after it with a
+    // timestamp now behind the one already written; skip it rather than throw.
+    if (isVideo) {
+      if (rebased <= run.lastVideoTs) return;
+      run.lastVideoTs = rebased;
+    } else {
+      if (rebased <= run.lastAudioTs) return;
+      run.lastAudioTs = rebased;
+    }
+    run.written += chunk.byteLength || 0;
+    try {
+      if (isVideo) run.muxer.addVideoChunk(chunk, meta, rebased);
+      else run.muxer.addAudioChunk(chunk, meta, rebased);
+    } catch (err) { /* finalize raced the last chunk */ }
+  }
+
+  function startCapturePumps(run) {
+    var vproc = new MediaStreamTrackProcessor({ track: run.stream.getVideoTracks()[0] });
+    run.videoReader = vproc.readable.getReader();
+    run.videoDone = pumpVideo(run);
+    if (run.hasAudio) {
+      var aproc = new MediaStreamTrackProcessor({ track: run.stream.getAudioTracks()[0] });
+      run.audioReader = aproc.readable.getReader();
+      run.audioDone = pumpAudio(run);
+    }
+  }
+
+  /** Reads one video frame at a time and encodes it, never letting the encoder
+   *  queue run away. Frames that arrive while paused are dropped, so the pause
+   *  leaves no frozen stretch in the file. */
+  function pumpVideo(run) {
+    var first = true;
+    function loop() {
+      return run.videoReader.read().then(function (res) {
+        if (res.done) return;
+        var frame = res.value;
+        if (run.state === 'paused' || !run.videoEncoder || run.videoEncoder.state === 'closed') {
+          frame.close();
+          return loop();
+        }
+        try { run.videoEncoder.encode(frame, { keyFrame: first || run.forceKeyFrame }); } catch (err) { /* closed */ }
+        first = false;
+        run.forceKeyFrame = false;
+        frame.close();
+        if (run.videoEncoder.encodeQueueSize > 8) {
+          return new Promise(function (r) { setTimeout(r, 4); }).then(loop);
+        }
+        return loop();
+      }).catch(function () { /* track ended or reader released */ });
+    }
+    return loop();
+  }
+
+  function pumpAudio(run) {
+    function loop() {
+      return run.audioReader.read().then(function (res) {
+        if (res.done) return;
+        var data = res.value;
+        if (run.state === 'paused' || !run.audioEncoder || run.audioEncoder.state === 'closed') {
+          data.close();
+          return loop();
+        }
+        try { run.audioEncoder.encode(data); } catch (err) { /* closed */ }
+        data.close();
+        if (run.audioEncoder.encodeQueueSize > 16) {
+          return new Promise(function (r) { setTimeout(r, 4); }).then(loop);
+        }
+        return loop();
+      }).catch(function () { /* track ended or reader released */ });
+    }
+    return loop();
+  }
+
+  /** Ends a WebCodecs run: stop capture, let the pumps finish, flush the
+   *  encoders, write the final moov and close the file. */
+  function finishWebCodecs(run) {
+    stopRecTicker();
+    run.state = 'finishing';
+    if (run.stream) run.stream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) {} });
+    var videoDone = run.videoDone || Promise.resolve();
+    var audioDone = run.audioDone || Promise.resolve();
+    Promise.all([videoDone, audioDone])
+      .then(function () {
+        if (run.videoEncoder && run.videoEncoder.state === 'configured') return run.videoEncoder.flush();
+      })
+      .then(function () {
+        if (run.audioEncoder && run.audioEncoder.state === 'configured') return run.audioEncoder.flush();
+      })
+      .then(function () {
+        if (run.muxer) run.muxer.finalize();
+        return run.writer ? run.writer.close() : null;
+      })
+      .then(function () {
+        if (rec !== run) return;
+        var where = run.folderName + '/' + run.fileName;
+        rec = null;
+        setRecTransport(null);
+        setRecordButton(false, false);
+        setRecStatus('Saved ' + where + ' (' + formatBytes(run.written) + ').', false);
+      })
+      .catch(function (err) { if (rec === run) recordFailure(err); });
+  }
+
+  /* ------------------------------------------------- MediaRecorder fallback */
+
+  function startMediaRecorder(run) {
+    var type = pickRecorderType();
+    if (!type) throw webCodecsUnavailableError();
+    run.type = type;
+    run.fileName = recordingFileName(run.startedAt, type.ext);
+    run.recorder = new MediaRecorder(run.stream, {
+      mimeType: type.mime,
+      videoBitsPerSecond: REC_VIDEO_BPS,
+      audioBitsPerSecond: REC_AUDIO_BPS
+    });
+    run.recorder.ondataavailable = onRecData;
+    run.recorder.onerror = function (e) { recordFailure(e.error || e); };
+    run.recorder.onstop = onRecStop;
+    // 2s slices: small enough to land on disk steadily, large enough not to
+    // grind. Each one is written to the file as it arrives (see onRecData), so
+    // a long service never piles up in memory.
+    run.recorder.start(2000);
+    markRecordingStarted(run, 'Recording the live display. Keep this console window open, and do not close the browser.');
   }
 
   function onRecData(event) {
@@ -2020,9 +2376,17 @@
 
   function pauseRecording() {
     if (!rec || rec.state !== 'recording') return;
-    rec.recorder.pause();
     rec.state = 'paused';
     rec.pausedAt = Date.now();
+    if (rec.mode === 'mediarecorder') {
+      rec.recorder.pause();
+    } else {
+      rec.pauseWallAt = performance.now();
+      // Drain the encoders so their buffered output lands before the pause
+      // offset moves; otherwise it surfaces afterwards with a stale timestamp.
+      if (rec.videoEncoder && rec.videoEncoder.state === 'configured') rec.videoEncoder.flush().catch(function () {});
+      if (rec.audioEncoder && rec.audioEncoder.state === 'configured') rec.audioEncoder.flush().catch(function () {});
+    }
     setRecTransport('paused');
     setRecordButton(true, true);
     setRecStatus('Recording paused — the file on disk so far is kept. Resume when you are ready.');
@@ -2032,7 +2396,17 @@
     if (!rec || rec.state !== 'paused') return;
     rec.pausedTotal += Date.now() - rec.pausedAt;
     rec.pausedAt = null;
-    rec.recorder.resume();
+    if (rec.mode === 'mediarecorder') {
+      rec.recorder.resume();
+    } else {
+      // The frames captured while paused were dropped, so shift the timeline
+      // back by the wall-clock time spent paused: the gap vanishes instead of
+      // leaving a frozen stretch in the file. The first frame back is a fresh
+      // keyframe, so seeking into the join stays clean.
+      rec.pausedMicros += Math.round((performance.now() - rec.pauseWallAt) * 1000);
+      rec.pauseWallAt = null;
+      rec.forceKeyFrame = true;
+    }
     rec.state = 'recording';
     setRecTransport('recording');
     setRecordButton(true, false);
@@ -2042,6 +2416,11 @@
   function stopRecording() {
     if (!rec || rec.stopRequested) return;
     rec.stopRequested = true;
+    if (rec.mode === 'webcodecs') {
+      setRecStatus('Finishing the file…', false);
+      finishWebCodecs(rec);
+      return;
+    }
     // A paused recorder still fires onstop (with the final data) when stopped.
     if (rec.recorder && rec.recorder.state !== 'inactive') {
       rec.recorder.stop();
@@ -2064,7 +2443,7 @@
   // Leaving the page tears the capture down; the recorder flushes what it has
   // as the page unloads, so the file is not left empty.
   window.addEventListener('beforeunload', function () {
-    if (rec && rec.recorder && rec.recorder.state !== 'inactive') {
+    if (rec && rec.mode === 'mediarecorder' && rec.recorder && rec.recorder.state !== 'inactive') {
       try { rec.recorder.stop(); } catch (err) {}
     }
   });

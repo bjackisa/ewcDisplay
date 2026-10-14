@@ -137,17 +137,24 @@ the URL changes, so a verse step does not reload it.
 Because the proxied page is served from our own origin it is *same-origin with
 the console*, which is what makes the next part possible.
 
-**Driving the page from the preview.** The operator can scroll and click the
-framed page from the console's preview and the live panel follows. While the
-webpage panel is both previewed and live (`previewCanDriveWebpage()`), the
-console arms a transparent sheet (`#preview-proxy`) over the preview frame and
-relays each interaction to the display as a `webpage-control` bus message; the
-preview's own frame is driven directly through `__ewcPreview.control` so both
-move together. Scroll deltas are sent as a fraction of the frame; a click is
-sent as the clicked element's child-index path from the page root, *not* a
-screen position — the preview and the projection size the panel differently
-(viewport-relative padding/gaps), so a point that hits a button in the preview
-can miss it on the glass, while the element path cannot. It is live, not
+**Driving the page from the preview.** The operator can scroll and interact
+with the framed page from the console's preview and the live panel follows.
+While the webpage panel is both previewed and live (`previewCanDriveWebpage()`),
+the console arms a transparent sheet (`#preview-proxy`) over the preview frame
+and relays each interaction to the display as a `webpage-control` bus message;
+the preview's own frame is driven directly through `__ewcPreview.control` so
+both move together. Scroll deltas are sent as a fraction of the frame; a pointer
+interaction is sent as the touched element's child-index path from the page
+root, *not* a screen position — the preview and the projection size the panel
+differently (viewport-relative padding/gaps), so a point that hits a button in
+the preview can miss it on the glass, while the element path cannot.
+
+The sheet relays the whole pointer sequence — `pointerdown`/`pointerup`/
+`pointermove` (coalesced to one per animation frame) plus `click` — and the
+display re-dispatches each as a real `PointerEvent` *and* `MouseEvent` pair at
+the element's centre. A lone synthetic `node.click()` is not enough: menus open
+on `pointerdown`, drag handles listen for `mousedown`, and hover styles track
+`pointermove`, so a real page ignores a bare click. It is live, not
 launch-gated, and disarms the moment the preview drifts from what is live.
 
 ## Recording the live display
@@ -158,26 +165,40 @@ the space left, and Pause/Resume/Stop. Nothing about it appears on the display.
 
 The church screen is a browser page, so there is no OS capture API to call.
 The console asks the browser for the screen with `getDisplayMedia` (the operator
-picks the projector's monitor and shares its audio) and `MediaRecorder` writes
-the MP4. That is what makes it OS-independent: the same code path runs on
-Windows, macOS and Linux because it is the browser, not the OS, doing the
-capture. The only hard requirement is a Chromium-based desktop browser — the
-File System Access API (`showDirectoryPicker`) does not exist in Firefox or
-Safari, and the console says so rather than half-working.
+picks the projector's monitor and shares its audio) and records it. That is what
+makes it OS-independent: the same code path runs on Windows, macOS and Linux
+because it is the browser, not the OS, doing the capture. The only hard
+requirement is a Chromium-based desktop browser — the File System Access API
+(`showDirectoryPicker`) does not exist in Firefox or Safari, and the console
+says so rather than half-working.
+
+The recording is written through **WebCodecs** (`VideoEncoder`/`AudioEncoder` +
+the vendored `vendor/mp4-muxer.js`, MIT). Screen frames and audio are pulled
+with `MediaStreamTrackProcessor`, encoded, and muxed into a *plain* MP4 whose
+single `moov` carries the real duration and the full sample table. That is the
+whole point: `MediaRecorder` writes a *fragmented* MP4 with no duration and no
+seek index, so players refuse to scrub or seek it. The muxer runs with
+`fastStart: false`, so each ~1s chunk is written to the chosen folder as it
+finalises (memory stays flat for a long service) and the `moov` lands at the
+end, where a local player reads it to seek. `MediaRecorder` is kept only as a
+fallback for a browser with no WebCodecs encoder (it then writes the fragmented
+MP4, or WebM, and the console says so).
+
+`firstTimestampBehavior: 'offset'` (not `cross-track-offset`) is required: the
+screen's video timestamps and the audio's come from different clocks, so a
+shared offset would stretch one track's second sample seconds away from its
+first. On Pause the encoders are flushed, the frames captured while paused are
+dropped, and `run.pausedMicros` shifts the resumed timeline back so the gap
+vanishes; the first frame after a resume is forced to a keyframe. The muxer
+re-times output, so each chunk's own timestamp is used (rebase + a monotonic
+guard), never an input-to-output lookup.
 
 The file lands in a folder the operator picks, named `DD-MM-YYYY-{5 letters}`,
-as `display-YYYY-MM-DD_HHMMSS.mp4`. The MP4 type is chosen from a candidate
-list best-first: real H.264/AAC where the browser has those encoders, otherwise
-an MP4 container holding VP9+Opus; WebM is the last resort and the console says
-so rather than mislabelling the extension. Each 2-second `MediaRecorder` slice
-is written straight to the file as it arrives (serialised through
-`run.flushPromise`, with the drain looping until the buffer is empty) so a
-two-hour service never piles up in memory and Stop cannot lose the final slice.
-
-The "space left" figure is the browser's own free-space estimate for this
-origin (`navigator.storage.estimate`), divided by the recording bitrate. A web
-page cannot read a drive's actual free space — the tooltip on `#rec-left` says
-so — but this is the room the recording actually has to grow into.
+as `display-YYYY-MM-DD_HHMMSS.mp4`. The "space left" figure is the browser's own
+free-space estimate for this origin (`navigator.storage.estimate`), divided by
+the recording bitrate. A web page cannot read a drive's actual free space — the
+tooltip on `#rec-left` says so — but this is the room the recording actually has
+to grow into.
 
 ## File map
 
@@ -192,6 +213,7 @@ so — but this is the room the recording actually has to grow into.
 | `console.css` | Control-room layout: top bar, controls rail, preview, the bottom panel picker. |
 | `landing.css` | `index.html` launcher. |
 | `serve.py` | Local http server, plus the `/proxy` the webpage panel needs. |
+| `vendor/mp4-muxer.js` | Vendored mp4-muxer v5.2.1 (MIT) — muxes WebCodecs chunks into the seekable MP4. Do not hand-edit. |
 | `bible-data.js` | KJV text, generated from `en_kjv.json` by `build_bible_data.py`. Do not hand-edit. |
 
 `index.bak.html` is the pre-split single-page version, kept for reference.
@@ -281,6 +303,21 @@ so — but this is the room the recording actually has to grow into.
 - **The bottom picker scales its labels instead of clipping them.** Seven
   names share one line in `.console__modes`; `white-space:nowrap` alone
   truncates them at ~900px, so the font size is clamped to the viewport width.
+- **A lone synthetic `node.click()` does not drive a real page.** The preview
+  relay must send the whole pointer sequence and the display must re-dispatch
+  real `PointerEvent`/`MouseEvent` pairs; menus open on `pointerdown`, drag
+  handles listen for `mousedown`, hover styles track `pointermove`.
+- **`MediaRecorder` cannot write a seekable MP4.** It emits a fragmented MP4
+  with no duration and no sample index, so players refuse to scrub it (the
+  "900 KB, cannot skip forward" symptom). WebCodecs + mp4-muxer is what gives a
+  real `moov`. `fastStart: 'in-memory'` would also produce a seekable file but
+  buffers the *whole* recording in RAM — never use it for a long service; the
+  default (`fastStart: false`) streams to disk and still seeks.
+- **`firstTimestampBehavior: 'cross-track-offset'` stretches a recording.**
+  The screen's video and the audio start on different clocks; the shared
+  offset yanks one track's second sample seconds away from its first. Use
+  `'offset'` (per-track), and rebase encoder output on the monotonic guard
+  rather than a fragile input-to-output timestamp map.
 
 ## Testing
 
@@ -318,9 +355,10 @@ and really loading even when the site sends `X-Frame-Options`).
 native pickers — `showDirectoryPicker` resolves to the Origin Private File
 System, and the fake screen-capture device stands in for the monitor — then
 checks that scrolling and clicking the console preview move the same page on the
-display, that the sheet only arms while the preview is what is live, and that a
-recording creates the dated folder, writes a real MP4 (`ftyp` box), pauses,
-resumes and stops.
+display, that a `pointerdown` (not just a click) reaches it, that the sheet only
+arms while the preview is what is live, and that a recording creates the dated
+folder, writes a real MP4 (`ftyp` box) that reports a real duration and a
+seekable range, pauses, resumes and stops.
 
 `test_resource_use.py` guards the cost of the heavy features: it samples the
 JS heap over time (a recording must not grow the heap — slices go to disk as

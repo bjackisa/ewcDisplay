@@ -93,7 +93,19 @@
     openDisplayBtn: document.getElementById('open-display-btn'),
     launchBtn: document.getElementById('launch-btn'),
 
+    recordBtn: document.getElementById('record-btn'),
+    recPanel: document.getElementById('rec-panel'),
+    recDot: document.getElementById('rec-dot'),
+    recTime: document.getElementById('rec-time'),
+    recLeft: document.getElementById('rec-left'),
+    recWhere: document.getElementById('rec-where'),
+    recPauseBtn: document.getElementById('rec-pause-btn'),
+    recStopBtn: document.getElementById('rec-stop-btn'),
+    recStatus: document.getElementById('rec-status'),
+
     previewNote: document.getElementById('preview-note'),
+    previewProxy: document.getElementById('preview-proxy'),
+    previewInteractiveHint: document.getElementById('preview-interactive-hint'),
     prevBtn: document.getElementById('prev-btn'),
     nextBtn: document.getElementById('next-btn'),
 
@@ -316,6 +328,7 @@
   }
 
   function updateLaunchNote() {
+    if (previewProxySync) previewProxySync();
     if (live.mode === null) {
       el.previewNote.textContent = 'Nothing launched yet — the church screen has not been set.';
       el.previewNote.dataset.state = 'idle';
@@ -342,6 +355,12 @@
       : 'Live on the church screen: ' + describe(live.mode, live.content) + '.';
     el.previewNote.dataset.state = 'live';
   }
+
+  /** Runs after every launch-note refresh so the interactive preview sheet is
+   *  armed exactly when the framed page it sits over is the live one. Defined
+   *  with the other preview helpers but wired to updateLaunchNote below, once
+   *  the webpage relay it belongs to exists. */
+  var previewProxySync = null;
 
   /* ==========================================================================
      6. THE BUS — console end
@@ -1441,9 +1460,15 @@
      Webpage panel
 
      The operator types a URL and the display frames it inside the glass panel.
-     Only the URL crosses the bus. A page that forbids framing (an
-     X-Frame-Options / frame-ancestors header) cannot be shown and will stay
-     blank; the hint in the console says so.
+     Only the URL crosses the bus.
+
+     A browser will not frame a page whose server sends X-Frame-Options or a
+     frame-ancestors CSP, and most of the web sends one — which is why the
+     panel used to come up blank. So the display fetches the page through this
+     project's own server (/proxy), which drops those headers and hands the
+     page back from our origin; relative links still resolve to the real site
+     thanks to a <base> the server injects. The URL bar keeps the address the
+     operator typed.
      -------------------------------------------------------------------------- */
 
   function setWebpageStatus(message, isError) {
@@ -1468,13 +1493,107 @@
     if (!url) { setWebpageStatus('Enter a web address like https://example.com', true); return; }
     el.webpageUrlInput.value = url;
     preview.webpageUrl = url;
-    setWebpageStatus('Loaded into the preview — press Launch to show it. If it stays blank, that site blocks embedding.');
+    setWebpageStatus('Loaded into the preview — press Launch to show it.');
     setMode('webpage');
   }
 
   el.webpageGoBtn.addEventListener('click', loadWebpage);
   el.webpageUrlInput.addEventListener('keydown', function (e) {
     if (e.key === 'Enter') { e.preventDefault(); loadWebpage(); }
+  });
+
+  /* --------------------------------------------------------------------------
+     Driving the framed page from the preview
+
+     The panel is a live page, and the operator wants to scroll it and click
+     things in it — a hymn sheet, a YouTube queue, a live score. The console
+     puts a transparent sheet over the preview's frame while the webpage panel
+     is both previewed and live, catches the scroll and click there, and
+     relays each one to the display, which applies it to its own frame. The
+     two frames then show the same page at the same place.
+
+     Scroll deltas go as a fraction of the framed viewport so both screens move
+     by the same visual amount; a click goes as the clicked element's path from
+     the page root, which is size-independent. It only arms when the preview
+     *is* what is live, so a preview of a page that has not been launched never
+     drives the screen by accident.
+     -------------------------------------------------------------------------- */
+
+  function previewCanDriveWebpage() {
+    return preview.mode === 'webpage' && !!preview.webpageUrl &&
+      live.mode === 'webpage' && !!live.content && !!live.content.url &&
+      live.content.url === preview.webpageUrl;
+  }
+
+  function syncPreviewProxy() {
+    var armed = previewCanDriveWebpage();
+    el.previewProxy.hidden = !armed;
+    el.previewProxy.classList.toggle('is-armed', armed);
+    el.previewInteractiveHint.hidden = !armed;
+  }
+
+  // updateLaunchNote runs on every state change and calls this, so the sheet
+  // arms and disarms with the launch note rather than on a separate path.
+  previewProxySync = syncPreviewProxy;
+
+  /** Sends one preview interaction to the display(s) and to the preview's own
+   *  frame, so both move together. */
+  function sendWebpageControl(message) {
+    message.type = 'webpage-control';
+    message.from = sessionId;
+    send(message);
+    if (previewReady && previewWindow && previewWindow.__ewcPreview) {
+      previewWindow.__ewcPreview.control(message);
+    }
+  }
+
+  el.previewProxy.addEventListener('wheel', function (e) {
+    if (!previewCanDriveWebpage()) return;
+    e.preventDefault();
+    var rect = el.previewProxy.getBoundingClientRect();
+    sendWebpageControl({
+      action: 'scroll',
+      dnx: e.deltaX / (rect.width || 1),
+      dny: e.deltaY / (rect.height || 1)
+    });
+  }, { passive: false });
+
+  /** The element under the operator's pointer inside the preview's framed
+   *  page, as a path from the page's root. The proxied page is same-origin, so
+   *  the console can identify the exact element; sending that path rather than
+   *  a screen position means the click lands on the same element even though
+   *  the preview and the projection size the panel differently. */
+  function previewFramePath(clientX, clientY) {
+    if (!previewFrame.contentDocument) return null;
+    // The event is in the console's coordinates; the preview's own document is
+    // a separate coordinate system, so translate across the iframe boundary
+    // first, then across the framed page's box inside that document.
+    var iframeRect = previewFrame.getBoundingClientRect();
+    if (!iframeRect.width || !iframeRect.height) return null;
+    var inX = (clientX - iframeRect.left) / iframeRect.width * previewFrame.clientWidth;
+    var inY = (clientY - iframeRect.top) / iframeRect.height * previewFrame.clientHeight;
+    var frame = previewFrame.contentDocument.getElementById('webpage-frame');
+    if (!frame || !frame.contentDocument) return null;
+    var rect = frame.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    var localX = (inX - rect.left) / rect.width * frame.clientWidth;
+    var localY = (inY - rect.top) / rect.height * frame.clientHeight;
+    var node = frame.contentDocument.elementFromPoint(localX, localY);
+    var path = [];
+    while (node && node.nodeType === 1 && path.length < 64) {
+      var parent = node.parentNode;
+      if (!parent) break;
+      path.unshift(Array.prototype.indexOf.call(parent.children, node));
+      node = parent;
+    }
+    return path.length ? path : null;
+  }
+
+  el.previewProxy.addEventListener('click', function (e) {
+    if (!previewCanDriveWebpage()) return;
+    var path = previewFramePath(e.clientX, e.clientY);
+    if (!path) return;
+    sendWebpageControl({ action: 'click', path: path });
   });
 
   /* ==========================================================================
@@ -1554,7 +1673,404 @@
   });
 
   /* ==========================================================================
-     13. KEYBOARD SHORTCUTS
+     13. RECORDING THE LIVE DISPLAY
+
+     A plain browser tool, so it has to work on Windows, macOS and Linux the
+     same way. The church screen is a browser page, so there is no OS capture
+     API to call: the console asks the browser for the screen with
+     getDisplayMedia (the operator picks the monitor the projector is on), and
+     MediaRecorder writes it to an MP4 with sound.
+
+     The file goes into a folder the operator picks with the File System Access
+     API — showDirectoryPicker — named DD-MM-YYYY-{5 letters}. Recording in
+     chunks straight to the chosen folder, rather than holding a two-hour
+     service in memory, is what makes a long recording survivable; it also
+     means the drive's free space is known, so the console can say how much
+     time is left.
+
+     Nothing about this appears on the live display: the indicator and the
+     pause/resume/stop controls live on the console only.
+     ========================================================================== */
+
+  /* Candidate MP4 types, best first. A browser that ships the H.264/AAC
+     encoders records true MP4; one that does not (Chrome/Chromium builds
+     without proprietary codecs) can still write an MP4 container holding
+     VP9 + Opus. Either way the file the operator gets ends in .mp4. If a
+     browser can write no MP4 at all, WebM is the last resort and the console
+     says so rather than writing a file the wrong extension. */
+  var RECORD_CANDIDATES = [
+    { mime: 'video/mp4;codecs=avc1.42E01E,mp4a.40.2', ext: 'mp4' },
+    { mime: 'video/mp4;codecs=avc1.4d002a,mp4a.40.2', ext: 'mp4' },
+    { mime: 'video/mp4;codecs=h264,aac', ext: 'mp4' },
+    { mime: 'video/mp4;codecs=vp9,opus', ext: 'mp4' },
+    { mime: 'video/mp4', ext: 'mp4' },
+    { mime: 'video/webm;codecs=vp9,opus', ext: 'webm' },
+    { mime: 'video/webm', ext: 'webm' }
+  ];
+
+  // Bits per second used to estimate the file size, hence how long the drive
+  // will last. Matched to a quality, 1080p-ish capture of a mostly static
+  // screen with audio.
+  var REC_VIDEO_BPS = 12000000;
+  var REC_AUDIO_BPS = 192000;
+
+  var rec = null;
+
+  function formatClock(totalSeconds) {
+    totalSeconds = Math.max(0, Math.floor(totalSeconds));
+    var h = Math.floor(totalSeconds / 3600);
+    var m = Math.floor((totalSeconds % 3600) / 60);
+    var s = totalSeconds % 60;
+    return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  function formatDuration(totalSeconds) {
+    totalSeconds = Math.max(0, Math.floor(totalSeconds));
+    var h = Math.floor(totalSeconds / 3600);
+    var m = Math.floor((totalSeconds % 3600) / 60);
+    var s = totalSeconds % 60;
+    if (h) return h + 'h ' + (m < 10 ? '0' : '') + m + 'm';
+    if (m) return m + 'm ' + (s < 10 ? '0' : '') + s + 's';
+    return s + 's';
+  }
+
+  function formatBytes(bytes) {
+    if (!bytes) return '0 MB';
+    if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+    if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    return Math.max(1, Math.round(bytes / 1024)) + ' KB';
+  }
+
+  /** The first recorder type this browser can actually write. */
+  function pickRecorderType() {
+    if (typeof MediaRecorder === 'undefined') return null;
+    for (var i = 0; i < RECORD_CANDIDATES.length; i += 1) {
+      var candidate = RECORD_CANDIDATES[i];
+      try {
+        if (MediaRecorder.isTypeSupported(candidate.mime)) return candidate;
+      } catch (err) { /* some builds throw instead of answering */ }
+    }
+    return null;
+  }
+
+  /** "DD-MM-YYYY-abcde" — the day the recording started, plus five random
+   *  letters so two recordings in a day never collide. */
+  function recordingFolderName(when) {
+    var d = when.getDate();
+    var m = when.getMonth() + 1;
+    var letters = 'abcdefghijklmnopqrstuvwxyz';
+    var suffix = '';
+    for (var i = 0; i < 5; i += 1) suffix += letters.charAt(Math.floor(Math.random() * 26));
+    return (d < 10 ? '0' : '') + d + '-' + (m < 10 ? '0' : '') + m + '-' + when.getFullYear() + '-' + suffix;
+  }
+
+  function recordingFileName(when, ext) {
+    var d = when.getDate();
+    var m = when.getMonth() + 1;
+    var hh = when.getHours();
+    var mm = when.getMinutes();
+    var ss = when.getSeconds();
+    function p(n) { return (n < 10 ? '0' : '') + n; }
+    return 'display-' + when.getFullYear() + '-' + p(m) + '-' + p(d) + '_' + p(hh) + p(mm) + p(ss) + '.' + ext;
+  }
+
+  function setRecStatus(message, isError) {
+    if (!el.recStatus) return;
+    el.recStatus.textContent = message || '';
+    el.recStatus.hidden = !message;
+    el.recStatus.dataset.state = isError ? 'error' : 'info';
+  }
+
+  function setRecordButton(active, paused) {
+    if (!el.recordBtn) return;
+    el.recordBtn.classList.toggle('is-recording', !!active);
+    el.recordBtn.textContent = active ? (paused ? '❙❙ Recording paused' : '● Recording…') : '● Record';
+  }
+
+  function setRecTransport(state) {
+    if (!el.recPanel) return;
+    el.recPanel.hidden = !state;
+    if (!state) { el.recWhere.textContent = ''; return; }
+    el.recPanel.dataset.state = state === 'paused' ? 'paused' : 'recording';
+    el.recPauseBtn.textContent = state === 'paused' ? 'Resume' : 'Pause';
+  }
+
+  /** Free space left for the recording, and how long that is at the current
+   *  bitrate. The directory handle itself does not report the drive's free
+   *  space, so the browser's own estimate for this origin stands in for it —
+   *  it is the space the recording actually has to live in. */
+  function updateRecRemaining() {
+    if (!rec || !el.recLeft) return;
+    if (!rec.freeBytes) { el.recLeft.textContent = 'Space left: unknown'; return; }
+    var bytesPerSecond = (REC_VIDEO_BPS + REC_AUDIO_BPS) / 8;
+    el.recLeft.textContent = 'Space left: about ' + formatDuration(rec.freeBytes / bytesPerSecond) +
+      ' (' + formatBytes(rec.freeBytes) + ')';
+  }
+
+  function refreshFreeSpace() {
+    if (!rec || !navigator.storage || !navigator.storage.estimate) return Promise.resolve();
+    return navigator.storage.estimate().then(function (estimate) {
+      if (!rec) return;
+      rec.freeBytes = Math.max(0, (estimate.quota || 0) - (estimate.usage || 0));
+      updateRecRemaining();
+      updateStorageWarning();
+    }).catch(function () {});
+  }
+
+  function startRecTicker() {
+    stopRecTicker();
+    rec.tick = setInterval(function () {
+      if (!rec) return;
+      el.recTime.textContent = formatClock((Date.now() - rec.startedAt - rec.pausedTotal) / 1000);
+      if (rec.state === 'recording') refreshFreeSpace();
+    }, 1000);
+  }
+
+  function stopRecTicker() {
+    if (rec && rec.tick) { clearInterval(rec.tick); rec.tick = null; }
+  }
+
+  function updateStorageWarning() {
+    if (!rec) return;
+    var bytesPerSecond = (REC_VIDEO_BPS + REC_AUDIO_BPS) / 8;
+    var seconds = rec.freeBytes ? rec.freeBytes / bytesPerSecond : 0;
+    if (seconds && seconds < 300) {
+      setRecStatus('Low on space — about ' + formatDuration(seconds) + ' of recording left on the chosen drive.', true);
+    } else {
+      setRecStatus(rec.note || '');
+    }
+  }
+
+  function recordFailure(err) {
+    stopRecTicker();
+    if (rec && rec.recorder && rec.recorder.state !== 'inactive') {
+      try { rec.recorder.stop(); } catch (stopErr) { /* already gone */ }
+    }
+    if (rec && rec.stream) rec.stream.getTracks().forEach(function (t) { t.stop(); });
+    var name = err && err.name;
+    if (name === 'NotAllowedError') {
+      setRecStatus('Recording was cancelled — no screen was shared.', true);
+    } else if (name === 'NotSupportedError') {
+      setRecStatus('This browser cannot record the screen.', true);
+    } else if (name === 'AbortError') {
+      setRecStatus('The folder picker was dismissed — recording was not started.', true);
+    } else {
+      setRecStatus('Could not start recording: ' + ((err && err.message) || err), true);
+    }
+    rec = null;
+    setRecTransport(null);
+    setRecordButton(false, false);
+  }
+
+  function startRecording() {
+    if (rec) return; // already running; the Stop button is how you end it
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      setRecStatus('This browser cannot capture the screen. Chrome, Edge, Firefox or Safari on a desktop can.', true);
+      return;
+    }
+    if (typeof window.showDirectoryPicker !== 'function') {
+      setRecStatus('Saving straight to a folder needs the File System Access API — open this console in Chrome or ' +
+        'Edge on a desktop. (Safari and Firefox can play the display but cannot record it to a folder.)', true);
+      return;
+    }
+    var type = pickRecorderType();
+    if (!type) { setRecStatus('This browser cannot record video at all.', true); return; }
+
+    // Both the folder picker and the screen picker need a user gesture. Ask
+    // for the folder first — that is the choice the operator made — then for
+    // the screen. A rejection at either step cancels cleanly.
+    window.showDirectoryPicker({ mode: 'readwrite', id: 'ewc-display-recordings' })
+      .then(function (dir) { return openRecording(dir, type); })
+      .catch(recordFailure);
+  }
+
+  function openRecording(dir, type) {
+    var startedAt = new Date();
+    var run = {
+      type: type, startedAt: startedAt,
+      folderName: recordingFolderName(startedAt),
+      fileName: recordingFileName(startedAt, type.ext),
+      dir: dir, folder: null, persistedBytes: 0, chunks: [], written: 0,
+      freeBytes: null, pausedTotal: 0, pausedAt: null, state: 'starting',
+      stream: null, recorder: null, tick: null, note: '',
+      stopRequested: false, finished: false, flushPromise: null
+    };
+    rec = run;
+
+    // Create the dated folder inside the one the operator chose, then start
+    // capturing. Every step reports its own failure so a refused screen share
+    // is not reported as a folder problem, and vice versa.
+    return dir.getDirectoryHandle(run.folderName, { create: true })
+      .then(function (folder) {
+        run.folder = folder;
+        return navigator.mediaDevices.getDisplayMedia({
+          video: { frameRate: 30 },
+          audio: true,
+          // Ask for the whole screen, so the projector's monitor is captured
+          // full screen rather than one window.
+          preferCurrentTab: false,
+          selfBrowserSurface: 'exclude',
+          surfaceSwitching: 'include',
+          systemAudio: 'include'
+        });
+      })
+      .then(function (stream) {
+        if (!rec) { stream.getTracks().forEach(function (t) { t.stop(); }); return; }
+        run.stream = stream;
+        run.recorder = new MediaRecorder(stream, {
+          mimeType: type.mime,
+          videoBitsPerSecond: REC_VIDEO_BPS,
+          audioBitsPerSecond: REC_AUDIO_BPS
+        });
+        run.recorder.ondataavailable = onRecData;
+        run.recorder.onerror = function (e) { recordFailure(e.error || e); };
+        run.recorder.onstop = onRecStop;
+        // The operator can also stop sharing from the browser's own bar; that
+        // ends the recording exactly as the Stop button does.
+        stream.getVideoTracks().forEach(function (track) {
+          track.addEventListener('ended', function () { if (rec) stopRecording(); });
+        });
+        // 2s slices: small enough to land on disk steadily, large enough not
+        // to grind. Each one is written to the file as it arrives (see
+        // onRecData), so a long service never piles up in memory.
+        run.recorder.start(2000);
+        run.state = 'recording';
+        run.note = 'Recording the live display. Keep this console window open, and do not close the browser.';
+        el.recWhere.textContent = run.folderName + '/' + run.fileName;
+        setRecTransport('recording');
+        setRecordButton(true, false);
+        setRecStatus(run.note);
+        startRecTicker();
+        refreshFreeSpace();
+      })
+      .catch(recordFailure);
+  }
+
+  function onRecData(event) {
+    if (!rec || !event.data || !event.data.size) return;
+    rec.chunks.push(event.data);
+    rec.written += event.data.size;
+    flushChunks(); // straight to disk, so a crash loses at most one slice
+  }
+
+  /** Pushes everything buffered so far to the chosen folder. Chunks are
+   *  written in order, then dropped, so memory never grows with the recording.
+   *  A flush in progress is shared rather than started twice — and, because
+   *  the drain loops until the buffer is empty, a slice that arrives while a
+   *  write is in flight (including the recorder's final one at Stop) is still
+   *  written before the returned promise settles. */
+  function flushChunks() {
+    var run = rec;
+    if (!run || !run.folder) return Promise.resolve();
+    if (run.flushPromise) return run.flushPromise;
+
+    var drain = function () {
+      if (!run.chunks.length) return Promise.resolve();
+      var pending = run.chunks;
+      run.chunks = [];
+      var offset = run.persistedBytes;
+      return run.folder.getFileHandle(run.fileName, { create: true })
+        .then(function (handle) { return handle.createWritable({ keepExistingData: true }); })
+        .then(function (writable) {
+          var writeNext = function (i) {
+            if (i >= pending.length) return writable.close();
+            return writable.write(pending[i]).then(function () {
+              offset += pending[i].size;
+              run.persistedBytes = offset;
+              return writeNext(i + 1);
+            });
+          };
+          return writable.seek(offset).then(function () { return writeNext(0); });
+        })
+        .then(drain); // pick up anything that arrived while this write ran
+    };
+
+    run.flushPromise = drain()
+      .catch(function (err) {
+        // Writing failed (drive removed, permission revoked, disk full). Stop
+        // cleanly and say why rather than pretending the file is safe.
+        if (rec === run) recordFailure(err);
+      })
+      .then(function () { run.flushPromise = null; });
+    return run.flushPromise;
+  }
+
+  function onRecStop() {
+    if (!rec || rec.finished) return;
+    rec.finished = true;
+    stopRecTicker();
+    if (rec.stream) rec.stream.getTracks().forEach(function (t) { t.stop(); });
+    var run = rec;
+    // The final blob is delivered just before onstop; flush it, then report.
+    flushChunks().then(function () {
+      if (rec !== run) return;
+      var where = run.folderName + '/' + run.fileName;
+      rec = null;
+      setRecTransport(null);
+      setRecordButton(false, false);
+      if (run.type.ext !== 'mp4') {
+        setRecStatus('Saved ' + where + ' as WebM — this browser has no MP4 encoder, so the extension is honest ' +
+          'rather than mislabelled.', true);
+      } else {
+        setRecStatus('Saved ' + where + ' (' + formatBytes(run.written) + ').', false);
+      }
+    });
+  }
+
+  function pauseRecording() {
+    if (!rec || rec.state !== 'recording') return;
+    rec.recorder.pause();
+    rec.state = 'paused';
+    rec.pausedAt = Date.now();
+    setRecTransport('paused');
+    setRecordButton(true, true);
+    setRecStatus('Recording paused — the file on disk so far is kept. Resume when you are ready.');
+  }
+
+  function resumeRecording() {
+    if (!rec || rec.state !== 'paused') return;
+    rec.pausedTotal += Date.now() - rec.pausedAt;
+    rec.pausedAt = null;
+    rec.recorder.resume();
+    rec.state = 'recording';
+    setRecTransport('recording');
+    setRecordButton(true, false);
+    setRecStatus('Recording again.');
+  }
+
+  function stopRecording() {
+    if (!rec || rec.stopRequested) return;
+    rec.stopRequested = true;
+    // A paused recorder still fires onstop (with the final data) when stopped.
+    if (rec.recorder && rec.recorder.state !== 'inactive') {
+      rec.recorder.stop();
+      setRecStatus('Finishing the file…', false);
+    } else {
+      onRecStop();
+    }
+  }
+
+  el.recordBtn.addEventListener('click', function () {
+    if (rec) { stopRecording(); return; }
+    startRecording();
+  });
+  el.recPauseBtn.addEventListener('click', function () {
+    if (!rec) return;
+    if (rec.state === 'paused') resumeRecording(); else pauseRecording();
+  });
+  el.recStopBtn.addEventListener('click', function () { stopRecording(); });
+
+  // Leaving the page tears the capture down; the recorder flushes what it has
+  // as the page unloads, so the file is not left empty.
+  window.addEventListener('beforeunload', function () {
+    if (rec && rec.recorder && rec.recorder.state !== 'inactive') {
+      try { rec.recorder.stop(); } catch (err) {}
+    }
+  });
+
+  /* ==========================================================================
+     15. KEYBOARD SHORTCUTS
      Anything typed into a field is left alone; otherwise ←/→ step verses,
      ↑/↓ step lyric lines, Space launches, and the ‹ › buttons mirror these.
      ========================================================================== */
@@ -1571,7 +2087,7 @@
   });
 
   /* ==========================================================================
-     14. INIT
+     16. INIT
      ========================================================================== */
 
   function init() {

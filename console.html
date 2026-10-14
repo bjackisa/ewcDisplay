@@ -31,6 +31,7 @@
 
     <div class="console__bar-actions">
       <button class="btn" id="open-display-btn" title="Open the projection window for the extended screen">Open display window</button>
+      <button class="btn" id="record-btn" title="Record the live display, full screen, to an MP4 on a drive you choose">● Record</button>
       <button class="btn primary" id="launch-btn">Launch</button>
     </div>
   </header>
@@ -275,8 +276,33 @@
           <button class="btn" id="next-btn" title="Next (→ or ↓)">›</button>
         </div>
       </div>
+
+      <!-- Recording status + transport. This lives on the console only — the
+           church screen never shows a recording indicator — and it appears
+           only while a recording is open. -->
+      <div class="rec-panel" id="rec-panel" hidden>
+        <span class="rec-panel__dot" id="rec-dot" aria-hidden="true"></span>
+        <span class="rec-panel__time" id="rec-time">00:00:00</span>
+        <span class="rec-panel__left" id="rec-left" title="A web page cannot read a drive's free space, so this is the browser's own free-space estimate for this site — the room the recording has to grow into."></span>
+        <span class="rec-panel__where" id="rec-where"></span>
+        <div class="rec-panel__actions">
+          <button class="btn" id="rec-pause-btn">Pause</button>
+          <button class="btn danger" id="rec-stop-btn">Stop</button>
+        </div>
+      </div>
+      <p class="rec-status" id="rec-status" hidden></p>
+
+      <p class="preview-interactive-hint" id="preview-interactive-hint" hidden>
+        Interactive — scroll or click on the preview to drive the same page on the live display.
+      </p>
+
       <div class="preview-frame" id="preview-frame">
         <iframe id="preview" src="display.html?preview=1" title="Display preview"></iframe>
+        <!-- Console-only. A transparent sheet over the preview's framed page:
+             the operator scrolls and clicks here and the console relays each
+             one to the live display, so the page on the church screen follows.
+             It never exists on the display itself, which stays untouchable. -->
+        <div class="preview-frame__proxy" id="preview-proxy" hidden aria-hidden="true"></div>
       </div>
     </main>
 

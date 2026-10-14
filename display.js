@@ -746,9 +746,11 @@
   }
 
   /** Frames a webpage inside the panel. The console sends only the URL; the
-   *  page loads here in an <iframe>. A site that forbids framing stays blank —
-   *  there is no reliable way to detect that from the outside, so the console
-   *  hint carries the warning instead. */
+   *  page is fetched through this project's own server (/proxy) rather than
+   *  straight from the site. The proxy drops the X-Frame-Options / CSP headers
+   *  that would otherwise leave the panel blank for most of the web, and adds
+   *  a <base> so the page's own relative assets still resolve to the real
+   *  site. If the fetch fails, the proxy's own error page explains why. */
   function renderWebpage(url) {
     if (!url) {
       el.webpageFrame.removeAttribute('src');
@@ -756,8 +758,47 @@
       el.webpageStatus.textContent = '';
       return;
     }
-    if (el.webpageFrame.getAttribute('src') !== url) el.webpageFrame.setAttribute('src', url);
+    var src = 'proxy?url=' + encodeURIComponent(url);
+    if (el.webpageFrame.getAttribute('src') !== src) el.webpageFrame.setAttribute('src', src);
     el.webpageStatus.hidden = true;
+  }
+
+  /** Applies a scroll or click the operator made over the console's preview,
+   *  to the page framed here. Scroll deltas arrive as a fraction of the frame
+   *  so the same message moves both screens by the same visual amount; a click
+   *  arrives as the element's path from the page root, so it lands on the same
+   *  element even though the preview and the projection size the panel
+   *  differently. The framed page is same-origin (the proxy served it), so it
+   *  can be driven directly. */
+  function webpageControl(message) {
+    var frame = el.webpageFrame;
+    if (!frame || !frame.contentWindow || !frame.contentDocument) return;
+
+    if (message.action === 'scroll') {
+      // Deltas arrive as a fraction of the framed viewport, so the same
+      // message scrolls the preview and the full-size screen by the same
+      // visual amount whatever size each is drawn at.
+      var dx = (message.dnx || 0) * frame.clientWidth;
+      var dy = (message.dny || 0) * frame.clientHeight;
+      try { frame.contentWindow.scrollBy(dx, dy); } catch (err) { /* navigated away */ }
+      return;
+    }
+
+    if (message.action === 'click') {
+      // The console sends the clicked element as a child-index path from the
+      // page root, having identified it in its own copy of the same-origin
+      // page. Replay it here rather than mapping a screen position, because
+      // the preview and the projection lay the panel out at different sizes —
+      // a point that hits the button in the preview can miss it on the glass.
+      var node = frame.contentDocument;
+      var path = message.path || [];
+      for (var i = 0; i < path.length && node; i++) {
+        node = node.children[path[i]];
+      }
+      try {
+        if (node && typeof node.click === 'function') node.click();
+      } catch (err) { /* detached node, or a navigation raced the click */ }
+    }
   }
 
   /** Shows the typed text: body in the scripture-text style, title in the
@@ -912,6 +953,11 @@
       if (typeof message.revision === 'number' && message.revision <= lastRevision) return;
       if (typeof message.revision === 'number') lastRevision = message.revision;
       applyPush(message);
+    } else if (message.type === 'webpage-control') {
+      // The operator scrolled or clicked over the console's preview; do the
+      // same to the page on the glass panel. Live, not launch-gated — it is
+      // the same page already on the screen, just being driven.
+      webpageControl(message);
     } else if (message.type === 'background') {
       // The bytes themselves live in the shared IndexedDB store; the message
       // is just the nudge to look. A cookie-light copy may ride along so the
@@ -927,7 +973,10 @@
   /** Console iframe: apply a state directly, bypassing the bus entirely. */
   window.__ewcPreview = {
     apply: function (message) { applyPush(message); },
-    backgroundBuffer: applyBackgroundBuffer
+    backgroundBuffer: applyBackgroundBuffer,
+    // The console relays preview scroll/click events to the live display; the
+    // preview's own copy is driven through this too, so both move together.
+    control: webpageControl
   };
 
   /** Applies one complete console state. */

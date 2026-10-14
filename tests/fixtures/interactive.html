@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Interactive Fixture</title>
+<!-- Pretend to be a real site that refuses to be framed. The proxy strips this
+     header, so the panel can still show the page — and, because the page is
+     then served from our own origin, the console can drive it. -->
+<meta http-equiv="X-Frame-Options" content="DENY">
+<style>
+  body { font: 16px system-ui, sans-serif; margin: 0; padding: 2rem; background: #101828; color: #eef; }
+  #tall { height: 2200px; }
+  #counter { font-size: 1.4rem; padding: .6rem 1rem; margin-bottom: 1rem; }
+</style>
+</head>
+<body>
+  <h1>Interactive Fixture</h1>
+  <p>A long page with a button, used to prove the console can scroll and click
+     the framed page on the live display.</p>
+  <button id="counter" type="button">Clicked 0 times</button>
+  <p id="status">not clicked yet</p>
+  <div id="tall"></div>
+  <p id="bottom">You reached the bottom.</p>
+  <script>
+    var n = 0;
+    document.getElementById('counter').addEventListener('click', function () {
+      n += 1;
+      this.textContent = 'Clicked ' + n + ' times';
+      document.getElementById('status').textContent = 'clicked ' + n + ' times';
+    });
+  </script>
+</body>
+</html>

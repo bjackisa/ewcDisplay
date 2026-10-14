@@ -99,6 +99,21 @@ body.console{
 }
 .console__bar-actions .btn{ flex:none; white-space:nowrap; }
 
+/* The Record button reads as armed while a recording is open, and its label
+   is set from JS (● Record / Recording…). */
+#record-btn.is-recording{
+  border-color:var(--sunrise-orange);
+  color:var(--sunrise-amber);
+}
+
+.btn.danger{
+  background:linear-gradient(135deg, #e0603f, var(--sunrise-orange));
+  color:var(--navy-950);
+  font-weight:600;
+  border:none;
+}
+.btn.danger:hover{ filter:brightness(1.06); }
+
 /* --------------------------------------------------------------------------
    Body: controls rail + preview
    -------------------------------------------------------------------------- */
@@ -281,3 +296,86 @@ body.console{
   border:0;
   display:block;
 }
+
+/* The pointer sheet over the preview. Hidden unless the webpage panel is both
+   previewed and live; while it is shown it swallows scrolls and clicks and the
+   console relays them to the live display. The hint text below the frame tells
+   the operator that it is armed. */
+.preview-frame__proxy{
+  position:absolute;
+  inset:0;
+  z-index:2;
+  display:none;
+  cursor:auto;
+}
+.preview-frame__proxy[hidden]{ display:none; }
+.preview-frame__proxy.is-armed{ display:block; }
+
+.preview-interactive-hint{
+  flex:none;
+  margin:0;
+  font-size:.74rem;
+  color:var(--sunrise-amber);
+}
+.preview-interactive-hint[hidden]{ display:none; }
+
+/* --------------------------------------------------------------------------
+   Recording transport — console-only, sitting under the preview toolbar
+   -------------------------------------------------------------------------- */
+.rec-panel{
+  flex:none;
+  display:flex;
+  align-items:center;
+  gap:.6rem;
+  padding:.45rem .7rem;
+  border:1px solid var(--glass-border);
+  border-radius:.7rem;
+  background:rgba(248,249,253,.05);
+  font-size:.8rem;
+  color:var(--cloud-dim);
+}
+.rec-panel[hidden]{ display:none; }
+.rec-panel__dot{
+  flex:none;
+  width:.6rem; height:.6rem;
+  border-radius:50%;
+  background:#e0603f;
+  box-shadow:0 0 0 0 rgba(224,96,63,.5);
+  animation:pulse 1.4s ease-in-out infinite;
+}
+.rec-panel[data-state="paused"] .rec-panel__dot{
+  background:#e2b53a;
+  animation:none;
+}
+.rec-panel__time{
+  font-family:var(--font-display);
+  font-variant-numeric:tabular-nums;
+  font-weight:600;
+  color:var(--cloud);
+}
+.rec-panel__left{ white-space:nowrap; }
+.rec-panel__where{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  color:var(--cloud-faint);
+}
+.rec-panel__actions{
+  margin-left:auto;
+  display:flex;
+  gap:.4rem;
+}
+.rec-panel__actions .btn{
+  flex:none;
+  padding:.35rem .7rem;
+  font-size:.78rem;
+}
+.rec-status{
+  flex:none;
+  margin:0;
+  font-size:.75rem;
+  color:var(--cloud-faint);
+}
+.rec-status[hidden]{ display:none; }
+.rec-status[data-state="error"]{ color:var(--sunrise-orange); }

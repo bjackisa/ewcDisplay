@@ -22,6 +22,7 @@ import pathlib
 import subprocess
 import sys
 import time
+import urllib.parse
 
 from playwright.sync_api import sync_playwright
 
@@ -223,6 +224,10 @@ def main():
                   con.evaluate("document.getElementById('media-status').textContent"))
 
             # ---------- Webpage panel -----------------------------------------
+            # The panel fetches the page through the project's own /proxy so a
+            # site that forbids framing (X-Frame-Options / frame-ancestors) can
+            # still appear. The frame's src is therefore the proxy URL, and the
+            # page itself must really load inside it.
             con.click('button[data-mode="webpage"]')
             con.fill("#webpage-url-input", "example.com")
             con.click("#webpage-go-btn")
@@ -230,19 +235,33 @@ def main():
             check("a bare host is normalized to https",
                   con.input_value("#webpage-url-input") == "https://example.com/",
                   con.input_value("#webpage-url-input"))
-            check("the preview frames the webpage",
+            check("the preview frames the webpage through the proxy",
                   con.evaluate("(function(){var d=document.getElementById('preview').contentDocument;"
                                "var f=d.querySelector('#webpage-frame');return f?f.getAttribute('src'):'';})()")
-                  == "https://example.com/")
+                  == "proxy?url=" + urllib.parse.quote("https://example.com/", safe=""))
             check("the webpage is launch-gated",
                   disp.evaluate("document.getElementById('webpage-view').style.display") == "none")
             con.click("#launch-btn")
-            disp.wait_for_timeout(1000)
+            disp.wait_for_timeout(1500)
             check("the webpage is framed on the screen",
-                  disp.evaluate("document.getElementById('webpage-frame').getAttribute('src')") == "https://example.com/",
+                  disp.evaluate("document.getElementById('webpage-frame').getAttribute('src')")
+                  == "proxy?url=" + urllib.parse.quote("https://example.com/", safe=""),
                   disp.evaluate("document.getElementById('webpage-frame').getAttribute('src')"))
             check("the webpage panel is shown",
                   disp.evaluate("getComputedStyle(document.getElementById('webpage-view')).display") != "none")
+            check("the framed page really loads on the screen",
+                  disp.evaluate("(function(){try{var f=document.getElementById('webpage-frame');"
+                                "return (f.contentDocument.title||'').indexOf('Example')!==-1;}catch(e){return false;}})()"))
+
+            # A site that refuses framing must still appear, because the proxy
+            # strips the header. This is the bug the proxy exists to fix.
+            con.fill("#webpage-url-input", "https://example.com")
+            con.click("#webpage-go-btn")
+            con.click("#launch-btn")
+            disp.wait_for_timeout(1500)
+            check("a frame-blocking site still loads",
+                  disp.evaluate("(function(){try{var f=document.getElementById('webpage-frame');"
+                                "return (f.contentDocument.title||'').indexOf('Example')!==-1;}catch(e){return false;}})()"))
 
             # ---------- AI without a key degrades cleanly ---------------------
             con.evaluate("localStorage.removeItem('ewc-display-gemini-key-v1')")

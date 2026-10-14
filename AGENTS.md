@@ -123,10 +123,61 @@ The media-key comparison in `applyMode()` still stops a silent re-push from
 reloading it.
 
 **Webpage.** `#webpage-url-input` / `#webpage-go-btn` normalizes to http(s) and
-sends only the URL; the display frames it in `#webpage-frame`. A site that sends
-`X-Frame-Options`/`frame-ancestors` cannot be framed and stays blank — there is
-no reliable way to detect that, so the console hint says so instead. The iframe
-is only re-pointed when the URL changes, so a verse step does not reload it.
+sends only the URL; the display frames it in `#webpage-frame`. The frame does
+**not** point at the site directly: it points at this project's own
+`proxy?url=…`, because a browser refuses to frame a page whose server sends
+`X-Frame-Options` or a `frame-ancestors` CSP — which is most of the web, and the
+reason the panel used to sit blank. `serve.py`'s `/proxy` fetches the URL,
+drops those headers (and any matching `<meta>` tags), injects a `<base>` so the
+page's own relative assets still resolve to the real site, and hands it back
+from our origin. It refuses private/loopback addresses unless the server was
+started with `EWC_PROXY_ALLOW_PRIVATE=1`. The iframe is only re-pointed when
+the URL changes, so a verse step does not reload it.
+
+Because the proxied page is served from our own origin it is *same-origin with
+the console*, which is what makes the next part possible.
+
+**Driving the page from the preview.** The operator can scroll and click the
+framed page from the console's preview and the live panel follows. While the
+webpage panel is both previewed and live (`previewCanDriveWebpage()`), the
+console arms a transparent sheet (`#preview-proxy`) over the preview frame and
+relays each interaction to the display as a `webpage-control` bus message; the
+preview's own frame is driven directly through `__ewcPreview.control` so both
+move together. Scroll deltas are sent as a fraction of the frame; a click is
+sent as the clicked element's child-index path from the page root, *not* a
+screen position — the preview and the projection size the panel differently
+(viewport-relative padding/gaps), so a point that hits a button in the preview
+can miss it on the glass, while the element path cannot. It is live, not
+launch-gated, and disarms the moment the preview drifts from what is live.
+
+## Recording the live display
+
+`#record-btn` in the console's top bar (next to Launch) starts a recording; a
+transport panel under the preview toolbar (`#rec-panel`) shows the elapsed time,
+the space left, and Pause/Resume/Stop. Nothing about it appears on the display.
+
+The church screen is a browser page, so there is no OS capture API to call.
+The console asks the browser for the screen with `getDisplayMedia` (the operator
+picks the projector's monitor and shares its audio) and `MediaRecorder` writes
+the MP4. That is what makes it OS-independent: the same code path runs on
+Windows, macOS and Linux because it is the browser, not the OS, doing the
+capture. The only hard requirement is a Chromium-based desktop browser — the
+File System Access API (`showDirectoryPicker`) does not exist in Firefox or
+Safari, and the console says so rather than half-working.
+
+The file lands in a folder the operator picks, named `DD-MM-YYYY-{5 letters}`,
+as `display-YYYY-MM-DD_HHMMSS.mp4`. The MP4 type is chosen from a candidate
+list best-first: real H.264/AAC where the browser has those encoders, otherwise
+an MP4 container holding VP9+Opus; WebM is the last resort and the console says
+so rather than mislabelling the extension. Each 2-second `MediaRecorder` slice
+is written straight to the file as it arrives (serialised through
+`run.flushPromise`, with the drain looping until the buffer is empty) so a
+two-hour service never piles up in memory and Stop cannot lose the final slice.
+
+The "space left" figure is the browser's own free-space estimate for this
+origin (`navigator.storage.estimate`), divided by the recording bitrate. A web
+page cannot read a drive's actual free space — the tooltip on `#rec-left` says
+so — but this is the room the recording actually has to grow into.
 
 ## File map
 
@@ -140,7 +191,7 @@ is only re-pointed when the URL changes, so a verse step does not reload it.
 | `console.base.css` | The form controls carried over from the old settings drawer. |
 | `console.css` | Control-room layout: top bar, controls rail, preview, the bottom panel picker. |
 | `landing.css` | `index.html` launcher. |
-| `serve.py` | Local http server. |
+| `serve.py` | Local http server, plus the `/proxy` the webpage panel needs. |
 | `bible-data.js` | KJV text, generated from `en_kjv.json` by `build_bible_data.py`. Do not hand-edit. |
 
 `index.bak.html` is the pre-split single-page version, kept for reference.
@@ -242,6 +293,8 @@ python3 tests/test_console_display.py   # the console/display split
 python3 tests/test_persistence.py       # backdrop + song persistence
 python3 tests/test_display_features.py  # type sizes + the panel modes
 python3 tests/test_ai_and_embeds.py     # AI, YouTube and the webpage panel
+python3 tests/test_recording_and_interactive.py  # recording + preview control
+python3 tests/test_resource_use.py      # heap/CPU stay bounded
 ```
 
 They cover: page errors, absence of controls on the display, launch vs preview
@@ -257,4 +310,22 @@ every panel mode (media, camera, text, No Panel, plus editing a song's lyrics).
 real request/response handling runs with no key or network) and checks the
 longest-verse reference visibility, AI verse search (previewed, launch-gated),
 the text polish (and its no-em-dash rule), AI images for the background and the
-media panel, YouTube embedding, and the webpage panel.
+media panel, YouTube embedding, and the webpage panel (framed through the proxy,
+and really loading even when the site sends `X-Frame-Options`).
+
+`test_recording_and_interactive.py` serves a throwaway "site" that sends
+`X-Frame-Options: DENY` (so the proxy is exercised for real) and stubs the two
+native pickers — `showDirectoryPicker` resolves to the Origin Private File
+System, and the fake screen-capture device stands in for the monitor — then
+checks that scrolling and clicking the console preview move the same page on the
+display, that the sheet only arms while the preview is what is live, and that a
+recording creates the dated folder, writes a real MP4 (`ftyp` box), pauses,
+resumes and stops.
+
+`test_resource_use.py` guards the cost of the heavy features: it samples the
+JS heap over time (a recording must not grow the heap — slices go to disk as
+they arrive — and the display's heap must be flat while idle and while the
+camera runs), asserts a camera track really *ends* when its panel leaves (or
+the camera light stays on), and checks the render loop and a recording stay
+well under one core. It prints the raw MB/CPU numbers; the gates are generous
+because headless software WebGL is far heavier than a real GPU.

@@ -20,6 +20,7 @@ writes) is the real code.
 import http.server
 import pathlib
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -231,41 +232,80 @@ def main():
                   con.evaluate("(function(){var b=document.getElementById('record-btn');"
                                "var l=document.getElementById('launch-btn');"
                                "return !!b && !!l && b.compareDocumentPosition(l)&Node.DOCUMENT_POSITION_FOLLOWING;})()"))
+            # Pause and Stop live between Record and Launch, but stay hidden
+            # until a recording is actually running.
+            check("the transport sits between Record and Launch, hidden at rest",
+                  con.evaluate("""(function(){
+                    var r=document.getElementById('record-btn');
+                    var p=document.getElementById('rec-pause-btn');
+                    var s=document.getElementById('rec-stop-btn');
+                    var l=document.getElementById('launch-btn');
+                    var order = r.compareDocumentPosition(p)&Node.DOCUMENT_POSITION_FOLLOWING
+                             && p.compareDocumentPosition(s)&Node.DOCUMENT_POSITION_FOLLOWING
+                             && s.compareDocumentPosition(l)&Node.DOCUMENT_POSITION_FOLLOWING;
+                    return order && p.hidden && s.hidden;
+                  })()"""))
             con.click("#record-btn")
             con.wait_for_timeout(1800)
 
-            state = con.evaluate("({panel: !document.getElementById('rec-panel').hidden,"
-                                 "btn: document.getElementById('record-btn').textContent,"
-                                 "where: document.getElementById('rec-where').textContent,"
-                                 "left: document.getElementById('rec-left').textContent})")
-            check("the recording panel appears on the console", state["panel"])
-            check("the Record button shows it is recording", "Recording" in state["btn"], state["btn"])
-            folder, _, filename = state["where"].partition("/")
-            check("the folder is DD-MM-YYYY-{5 letters}",
-                  bool(re.match(r"^\d{2}-\d{2}-\d{4}-[a-z]{5}$", folder)), folder)
-            check("the file is an .mp4", filename.endswith(".mp4"), filename)
-            check("it reports how much time is left", "Space left" in state["left"], state["left"])
+            state = con.evaluate("({pauseHidden: document.getElementById('rec-pause-btn').hidden,"
+                                 "stopHidden: document.getElementById('rec-stop-btn').hidden,"
+                                 "label: document.getElementById('record-btn-label').textContent,"
+                                 "icons: [document.getElementById('rec-pause-btn').textContent.trim(),"
+                                 "        document.getElementById('rec-stop-btn').textContent.trim()],"
+                                 "dot: getComputedStyle(document.getElementById('record-btn')"
+                                 "      .querySelector('.rec-btn__dot')).animationName,"
+                                 "chrome: !!document.getElementById('rec-panel')"
+                                 "        || !!document.getElementById('rec-status')})")
+            check("Pause and Stop appear once recording starts",
+                  not state["pauseHidden"] and not state["stopHidden"])
+            check("both transport buttons are icon-only",
+                  state["icons"] == ["", ""], state["icons"])
+            check("the Record button counts recorded time against the estimate",
+                  bool(re.match(r"^\d{2}:\d{2}/\d{1,2}:\d{2}(:\d{2})?$", state["label"])), state["label"])
+            check("the Record button carries the recording dot",
+                  state["dot"] == "rec-pulse", state["dot"])
+            check("no recording panel or explanatory line is left in the console",
+                  not state["chrome"])
 
             con.click("#rec-pause-btn")
             con.wait_for_timeout(300)
-            check("pausing shows Resume", con.inner_text("#rec-pause-btn") == "Resume")
-            check("pausing is reflected in the panel",
-                  con.evaluate("document.getElementById('rec-panel').dataset.state") == "paused")
+            check("pausing swaps the icon button to Resume",
+                  con.get_attribute("#rec-pause-btn", "title") == "Resume")
+            check("the paused button is visibly paused",
+                  con.evaluate("document.getElementById('rec-pause-btn')"
+                               ".classList.contains('is-paused')"))
             con.click("#rec-pause-btn")
             con.wait_for_timeout(300)
-            check("resuming shows Pause again", con.inner_text("#rec-pause-btn") == "Pause")
+            check("resuming swaps it back to Pause",
+                  con.get_attribute("#rec-pause-btn", "title") == "Pause")
 
             time.sleep(4)
             mid = con.evaluate(DUMP_OPFS)
             check("the recording is being written to the chosen folder",
-                  any(k.startswith(folder + "/") and k.endswith(".mp4") for k in mid), mid)
+                  any(k.endswith(".mp4") and re.match(r"^\d{2}-\d{2}-\d{4}-[a-z]{5}/", k) for k in mid), mid)
 
             con.click("#rec-stop-btn")
-            con.wait_for_timeout(2000)
-            check("stopping hides the recording panel",
-                  con.evaluate("document.getElementById('rec-panel').hidden"))
-            check("stopping reports the saved file",
-                  "Saved" in con.inner_text("#rec-status"), con.inner_text("#rec-status"))
+            con.wait_for_timeout(300)
+            # The bar rests the instant Stop is pressed, even though the muxer
+            # is still putting the file together in the background.
+            check("stopping returns the transport to rest at once",
+                  con.evaluate("document.getElementById('rec-pause-btn').hidden"
+                               " && document.getElementById('rec-stop-btn').hidden"))
+            check("the Record button rests at once too",
+                  con.inner_text("#record-btn-label") == "Record")
+            con.wait_for_timeout(3000)
+            check("stopping hides the transport again",
+                  con.evaluate("document.getElementById('rec-pause-btn').hidden"
+                               " && document.getElementById('rec-stop-btn').hidden"))
+            check("the Record button goes back to its resting label",
+                  con.inner_text("#record-btn-label") == "Record")
+            toast = con.evaluate("Array.from(document.querySelectorAll('.toast'))"
+                                 ".map(t=>t.textContent).join(' | ')")
+            check("a notification reports the saved file instead of a status line",
+                  "Saved" in toast, toast)
+            check("the notification names a dated folder and an .mp4",
+                  bool(re.search(r"\d{2}-\d{2}-\d{4}-[a-z]{5}/\S+\.mp4", toast)), toast)
 
             final = con.evaluate(DUMP_OPFS)
             sizes = {k: v for k, v in final.items() if k.endswith(".mp4")}
@@ -304,7 +344,13 @@ def main():
               const out = {duration: v.duration,
                            seekable: v.seekable.length ? v.seekable.end(0) : 0,
                            err: v.error && v.error.message};
-              try { v.currentTime = Math.max(0, (v.duration || 2) - 0.5);
+              // Seek backwards to a mid-point as well as forwards to the end:
+              // one keyframe at the start would pass a forward seek and still
+              // leave everything before the target unreachable.
+              try { v.currentTime = Math.max(0, (v.duration || 2) / 2);
+                    await new Promise(r=>{v.onseeked=r;setTimeout(r,1500);});
+                    out.seekedMid = v.currentTime;
+                    v.currentTime = Math.max(0, (v.duration || 2) - 0.5);
                     await new Promise(r=>{v.onseeked=r;setTimeout(r,1500);});
                     out.seekedTo = v.currentTime; }
               catch(e){ out.seekedTo = 'err'; }
@@ -312,8 +358,72 @@ def main():
             }""")
             check("the recorded MP4 has a real duration and is seekable",
                   seek["duration"] > 0 and seek["seekable"] > 0 and not seek["err"]
-                  and isinstance(seek["seekedTo"], (int, float)),
+                  and isinstance(seek["seekedTo"], (int, float))
+                  and isinstance(seek.get("seekedMid"), (int, float)),
                   seek)
+
+            # The picture must be a true 4K one, and the file must carry an
+            # audio track: the console mixes the microphone (and any captured
+            # system sound) into a track of its own, and a file with no audio
+            # makes an <audio> element fail to load.
+            media = con.evaluate("""async () => {
+              const root = await navigator.storage.getDirectory();
+              async function mp4(dir){
+                for await (const [name, h] of dir.entries()){
+                  if (h.kind === 'directory'){ const r = await mp4(h); if (r) return r; }
+                  else if (name.endsWith('.mp4')) { return await h.getFile(); }
+                }
+                return null;
+              }
+              const f = await mp4(root);
+              const v = document.createElement('video');
+              v.src = URL.createObjectURL(f);
+              await new Promise(r=>{v.onloadedmetadata=r;v.onerror=r;setTimeout(r,4000);});
+              const a = document.createElement('audio');
+              a.src = URL.createObjectURL(f);
+              await new Promise(r=>{a.onloadedmetadata=r;a.onerror=r;setTimeout(r,4000);});
+              return {w: v.videoWidth, h: v.videoHeight,
+                      audioDuration: a.duration, audioErr: a.error && a.error.message};
+            }""")
+            check("the recording is 3840x2160",
+                  media["w"] == 3840 and media["h"] == 2160, media)
+            check("the recording carries an audio track",
+                  media["audioDuration"] > 0 and not media["audioErr"], media)
+
+            # An audio *track* is not the same as audible sound: the bug that
+            # shipped was a silent one — the pump never ended, so the mixed
+            # track was never finalized and the file played with no voice. Ask
+            # ffmpeg for the real level when it is available.
+            if shutil.which("ffmpeg"):
+                mp4_bytes = con.evaluate("""async () => {
+                  const root = await navigator.storage.getDirectory();
+                  async function mp4(dir){
+                    for await (const [name, h] of dir.entries()){
+                      if (h.kind === 'directory'){ const r = await mp4(h); if (r) return r; }
+                      else if (name.endsWith('.mp4')) return await h.getFile();
+                    }
+                    return null;
+                  }
+                  const f = await mp4(root);
+                  const buf = new Uint8Array(await f.arrayBuffer());
+                  let s = '';
+                  for (let i = 0; i < buf.length; i++) s += String.fromCharCode(buf[i]);
+                  return btoa(s);
+                }""")
+                import base64, tempfile
+                with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+                    tmp.write(base64.b64decode(mp4_bytes))
+                    tmp_path = tmp.name
+                level = subprocess.run(
+                    ["ffmpeg", "-hide_banner", "-i", tmp_path, "-af", "volumedetect",
+                     "-f", "null", "-"], capture_output=True, text=True).stderr
+                pathlib.Path(tmp_path).unlink(missing_ok=True)
+                m = re.search(r"mean_volume:\s*(-?\d+(?:\.\d+)?) dB", level)
+                mean_db = float(m.group(1)) if m else None
+                check("the recorded audio is actually audible, not silent",
+                      mean_db is not None and mean_db > -60, f"{mean_db} dB mean")
+            else:
+                print("SKIP  ffmpeg not installed — audio level not measured")
 
             # The display must never show any recording chrome.
             check("nothing about recording appears on the live display",

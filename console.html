@@ -31,7 +31,24 @@
 
     <div class="console__bar-actions">
       <button class="btn" id="open-display-btn" title="Open the projection window for the extended screen">Open display window</button>
-      <button class="btn" id="record-btn" title="Record the live display, full screen, to an MP4 on a drive you choose">● Record</button>
+
+      <!-- Record, and the transport that only exists while a recording is
+           open. Pause/Stop sit between Record and Launch and are hidden until
+           the operator starts one; each is an icon, because the icon is the
+           whole message. The Record button itself carries the pulsing dot and
+           the elapsed / remaining time. -->
+      <button class="btn rec-btn" id="record-btn" title="Record the live display to a 4K MP4 on a drive you choose">
+        <span class="rec-btn__dot" id="rec-dot" aria-hidden="true"></span>
+        <span class="rec-btn__label" id="record-btn-label">Record</span>
+      </button>
+      <button class="btn icon-btn" id="rec-pause-btn" title="Pause" aria-label="Pause recording" hidden>
+        <svg class="icon-pause" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="5" width="3.6" height="14" rx="1.2"/><rect x="13.4" y="5" width="3.6" height="14" rx="1.2"/></svg>
+        <svg class="icon-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.4 18.2 12 8 18.6Z"/></svg>
+      </button>
+      <button class="btn icon-btn danger" id="rec-stop-btn" title="Stop" aria-label="Stop recording" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6.6" y="6.6" width="10.8" height="10.8" rx="2.2"/></svg>
+      </button>
+
       <button class="btn primary" id="launch-btn">Launch</button>
     </div>
   </header>
@@ -53,7 +70,6 @@
         <div class="field" style="margin-top:.6rem;">
           <label for="ai-key-input">Gemini API key</label>
           <input type="password" id="ai-key-input" placeholder="Paste your Gemini API key" autocomplete="off">
-          <p class="hint">Powers the verse search, the text polish button and the AI image generator. It is stored only in this browser and sent only to Google's Gemini API.</p>
           <p class="hint" id="ai-key-status"></p>
         </div>
       </details>
@@ -76,11 +92,9 @@
             </div>
           </div>
           <button class="btn" id="next-sunday-btn" style="margin-top:.8rem;">Set to next Sunday, 9:00 AM</button>
-          <p class="hint">The countdown ticks live once it is on the screen.</p>
         </div>
 
         <div id="clock-fields" hidden>
-          <p class="hint">The analog clock needs no settings — launch it when you want it on the screen.</p>
         </div>
 
         <div id="scripture-fields" hidden>
@@ -90,7 +104,7 @@
               <input type="text" id="scripture-ai-input" placeholder="Type anything you know: “God so loved the world”, “Esther 8:9”, “where Jesus calms the storm”…" autocomplete="off">
               <button class="btn primary" id="scripture-ai-btn" title="Find this verse with AI">Find</button>
             </div>
-            <p class="hint" id="scripture-ai-status">Type anything you remember — a phrase, a reference, a story — and AI finds the exact verse and previews it, ready to launch.</p>
+            <p class="hint" id="scripture-ai-status"></p>
           </div>
 
           <div class="field-row" style="margin-top:.9rem;">
@@ -115,7 +129,6 @@
           </div>
           <input type="file" id="scripture-file-input" accept="application/json,.json">
           <p class="hint" id="scripture-status" style="margin-top:.6rem;">Loading Bible…</p>
-          <p class="hint">Review a verse here, then Launch it. Once it is live, the ← and → keys (or the ‹ › buttons above the preview) step straight to the next verse on the screen — no relaunch. Picking a different book or chapter still waits for Launch.</p>
         </div>
 
         <div id="lyrics-fields" hidden>
@@ -145,7 +158,6 @@
               <p class="hint" id="song-status" style="margin-top:.6rem;"></p>
             </div>
           </div>
-          <p class="hint">Songs are saved on this device. Once a song is live, the ↑ and ↓ keys (or the ‹ › buttons above the preview) move the current line on the screen — no relaunch. Picking a different song still waits for Launch, and editing a song that is already live updates the screen as you save.</p>
         </div>
 
         <div id="text-fields" hidden>
@@ -161,7 +173,6 @@
             <label for="text-title-input">Title (optional)</label>
             <input type="text" id="text-title-input" maxlength="80" placeholder="e.g. Psalm 23:1">
           </div>
-          <p class="hint">Shown like a scripture verse: the text carries the panel, the title sits beneath it.</p>
         </div>
 
         <div id="media-fields" hidden>
@@ -177,7 +188,6 @@
               <input type="text" id="media-youtube-input" placeholder="Paste a YouTube video URL…" autocomplete="off">
               <button class="btn" id="media-youtube-btn">Embed</button>
             </div>
-            <p class="hint">Paste any YouTube link — it plays on the church screen inside the panel.</p>
           </div>
 
           <div class="field" style="margin-top:.9rem;">
@@ -189,7 +199,6 @@
           </div>
 
           <p class="hint" id="media-status"></p>
-          <p class="hint">Photos, GIFs, videos and audio are copied to the display’s own store, so they play even if this window is closed. The panel grows to fit them.</p>
         </div>
 
         <div id="camera-fields" hidden>
@@ -198,13 +207,12 @@
             <select id="camera-device-select" disabled>
               <option>Looking for cameras…</option>
             </select>
-            <p class="hint" id="camera-device-hint">Launching the Camera opens it on the display device itself.</p>
+            <p class="hint" id="camera-device-hint"></p>
           </div>
           <div class="file-row" style="margin-top:.8rem;">
             <button class="btn" id="camera-stop-btn">Back to timer panel</button>
           </div>
           <p class="hint" id="camera-status-console"></p>
-          <p class="hint">Launching the Camera opens the chosen camera on the display device itself. Switching camera reopens the feed live; launching any other panel stops it. The panel grows to fit the feed.</p>
         </div>
 
         <div id="webpage-fields" hidden>
@@ -215,13 +223,12 @@
               <button class="btn primary" id="webpage-go-btn">Load</button>
             </div>
             <p class="hint" id="webpage-status"></p>
-            <p class="hint">The page is shown inside the panel frame. Many sites block being embedded (they send <code>X-Frame-Options</code>), so if a page stays blank it cannot be framed — try a page that allows embedding.</p>
-          </div>
+            </div>
         </div>
 
       </div>
 
-      <p class="hint" id="mode-fields-note" hidden>No Panel is on — the glass is removed, so there is nothing to configure here. Switch it off to set up a panel.</p>
+      <p class="hint" id="mode-fields-note" hidden>No Panel is on.</p>
 
       <hr class="sep">
 
@@ -233,7 +240,6 @@
           <span class="switch__track"><span class="switch__thumb"></span></span>
           <span class="switch__label">Hide the panel — background only</span>
         </button>
-        <p class="hint">Switch on to remove the glass panel entirely and leave just the background image.</p>
       </div>
 
       <div class="field" style="margin-top:1rem;">
@@ -248,17 +254,9 @@
           <button class="btn primary" id="bg-ai-btn">Generate</button>
         </div>
         <p class="hint" id="bg-ai-status"></p>
-        <p class="hint">Used behind the glass panel. If none is chosen, an ambient sunrise scene is shown instead.</p>
       </div>
 
       <hr class="sep">
-
-      <p class="hint" id="shortcut-hint">
-        Shortcuts: <b>→</b>/<b>←</b> step verses, <b>↓</b>/<b>↑</b> step lyric lines,
-        <b>Ctrl/⌘+Enter</b> saves a song, <b>Space</b> launches. A verse or lyric
-        step goes live at once once that panel is already on the screen; every
-        other change — a new book, chapter or song, a new mode — waits for Launch.
-      </p>
 
     </aside>
 
@@ -270,31 +268,12 @@
     <main class="console__preview">
       <div class="preview-toolbar">
         <span class="preview-toolbar__label">Preview</span>
-        <span class="preview-toolbar__hint" id="preview-note">Not launched — the screen is showing the previous item.</span>
+        <span class="preview-toolbar__hint" id="preview-note" data-state="idle">Not Launched</span>
         <div class="preview-toolbar__steps">
           <button class="btn" id="prev-btn" title="Previous (← or ↑)">‹</button>
           <button class="btn" id="next-btn" title="Next (→ or ↓)">›</button>
         </div>
       </div>
-
-      <!-- Recording status + transport. This lives on the console only — the
-           church screen never shows a recording indicator — and it appears
-           only while a recording is open. -->
-      <div class="rec-panel" id="rec-panel" hidden>
-        <span class="rec-panel__dot" id="rec-dot" aria-hidden="true"></span>
-        <span class="rec-panel__time" id="rec-time">00:00:00</span>
-        <span class="rec-panel__left" id="rec-left" title="A web page cannot read a drive's free space, so this is the browser's own free-space estimate for this site — the room the recording has to grow into."></span>
-        <span class="rec-panel__where" id="rec-where"></span>
-        <div class="rec-panel__actions">
-          <button class="btn" id="rec-pause-btn">Pause</button>
-          <button class="btn danger" id="rec-stop-btn">Stop</button>
-        </div>
-      </div>
-      <p class="rec-status" id="rec-status" hidden></p>
-
-      <p class="preview-interactive-hint" id="preview-interactive-hint" hidden>
-        Interactive — scroll or click on the preview to drive the same page on the live display.
-      </p>
 
       <div class="preview-frame" id="preview-frame">
         <iframe id="preview" src="display.html?preview=1" title="Display preview"></iframe>
@@ -323,6 +302,11 @@
       <button type="button" data-mode="webpage">Webpage</button>
     </div>
   </footer>
+
+  <!-- Console-only notifications. A sandbar slides in, says one short thing,
+       and leaves on its own; nothing here needs dismissing, and none of it
+       ever reaches the church screen. -->
+  <div class="toast-stack" id="toast-stack" role="status" aria-live="polite"></div>
 
 </div>
 

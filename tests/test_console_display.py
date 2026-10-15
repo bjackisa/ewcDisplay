@@ -68,7 +68,7 @@ def main():
             # The display was opened fresh and has launched nothing, so the
             # console must not claim anything is live.
             check("console knows nothing has launched yet",
-                  "Nothing launched yet" in console.inner_text("#preview-note"),
+                  console.inner_text("#preview-note").strip() == "Not Launched",
                   console.inner_text("#preview-note"))
 
             # ---------- timer ---------------------------------------------------
@@ -79,15 +79,15 @@ def main():
             check("timer reaches the screen",
                   display.evaluate("getComputedStyle(document.getElementById('timer-view')).display") == "flex")
             check("launch note reports live",
-                  "Live on the church screen" in console.inner_text("#preview-note"),
+                  console.inner_text("#preview-note").strip() == "Live",
                   console.inner_text("#preview-note"))
 
-            # Editing a *live* mode's own fields is the "edited" case. Checked
-            # here, while the timer is the live thing.
+            # Editing a *live* mode's own fields is not a step, so the note
+            # drops back to "Not Launched" until the change is launched.
             console.fill("#event-name-input", "Evening Service")
             console.wait_for_timeout(300)
-            check("editing a live mode flips the note to 'edited'",
-                  "Preview edited" in console.inner_text("#preview-note"),
+            check("editing a live mode drops the note back to 'Not Launched'",
+                  console.inner_text("#preview-note").strip() == "Not Launched",
                   console.inner_text("#preview-note"))
             check("the edit does not leak to the screen before launch",
                   "Evening Service" not in display.evaluate("document.body.innerText"))
@@ -96,14 +96,14 @@ def main():
             check("the edited title lands on launch",
                   "Evening Service" in display.evaluate("document.body.innerText"))
             check("re-reading the note after relaunch reads live again",
-                  "Live on the church screen" in console.inner_text("#preview-note"),
+                  console.inner_text("#preview-note").strip() == "Live",
                   console.inner_text("#preview-note"))
 
             # ---------- clock ---------------------------------------------------
             console.click('button[data-mode="clock"]')
             console.wait_for_timeout(300)
             check("switching mode flips the note to 'not launched'",
-                  "Not launched" in console.inner_text("#preview-note"),
+                  console.inner_text("#preview-note").strip() == "Not Launched",
                   console.inner_text("#preview-note"))
             check("clock not on screen until launched",
                   display.evaluate("getComputedStyle(document.getElementById('clock-view')).display") == "none")
@@ -143,7 +143,7 @@ def main():
             check("ArrowRight advanced the preview too",
                   "John 3:17" in pv("scripture-reference"), pv("scripture-reference"))
             check("the step did not need a launch",
-                  "Live on the church screen" in console.inner_text("#preview-note"),
+                  console.inner_text("#preview-note").strip() == "Live",
                   console.inner_text("#preview-note"))
             console.keyboard.press("ArrowLeft")
             console.wait_for_timeout(600)
@@ -235,7 +235,7 @@ def main():
             check("console reconnects after reload",
                   console.get_attribute("#link-status", "data-state") == "ok")
             check("console adopts what is already live",
-                  "Live on the church screen" in console.inner_text("#preview-note"),
+                  console.inner_text("#preview-note").strip() == "Live",
                   console.inner_text("#preview-note"))
             # A launch straight after the reload must not be swallowed as stale.
             console.click('button[data-mode="clock"]')

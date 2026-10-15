@@ -204,7 +204,7 @@ def main():
                   con.evaluate("!!document.querySelector('#preview').contentWindow.document"
                                ".querySelector('#lyrics-track .lyric-line.is-active')"))
             check("the launch note still reads live after a step",
-                  "Live on the church screen" in con.inner_text("#preview-note"),
+                  con.inner_text("#preview-note").strip() == "Live",
                   con.inner_text("#preview-note"))
 
             # ---- camera panel, separate from media ---------------------------

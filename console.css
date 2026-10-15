@@ -90,6 +90,12 @@ body.console{
   0%,100%{ box-shadow:0 0 0 0 rgba(255,194,75,.5); }
   50%{ box-shadow:0 0 0 .4rem rgba(255,194,75,0); }
 }
+/* The record dot's own glow, in its own colour — the link dot above keeps the
+   amber one. */
+@keyframes rec-pulse{
+  0%,100%{ box-shadow:0 0 0 0 rgba(224,96,63,.55); }
+  50%{ box-shadow:0 0 0 .4rem rgba(224,96,63,0); }
+}
 
 .console__bar-actions{
   margin-left:auto;
@@ -99,12 +105,59 @@ body.console{
 }
 .console__bar-actions .btn{ flex:none; white-space:nowrap; }
 
-/* The Record button reads as armed while a recording is open, and its label
-   is set from JS (● Record / Recording…). */
-#record-btn.is-recording{
+/* --------------------------------------------------------------------------
+   Record + transport, all in the top bar.
+   The Record button carries the dot and, once a recording is open, the
+   elapsed / estimated-remaining time in place of its label. Pause and Stop
+   appear beside it as bare icons — the icon is the whole message, so there is
+   no word to read and nothing to explain.
+   -------------------------------------------------------------------------- */
+.rec-btn{
+  display:inline-flex;
+  align-items:center;
+  gap:.5rem;
+  font-variant-numeric:tabular-nums;
+}
+.rec-btn__dot{
+  flex:none;
+  width:.55rem; height:.55rem;
+  border-radius:50%;
+  background:#e0603f;
+  transition:background .2s ease;
+}
+.rec-btn__label{ white-space:nowrap; }
+.rec-btn.is-recording{
   border-color:var(--sunrise-orange);
   color:var(--sunrise-amber);
 }
+.rec-btn.is-recording .rec-btn__dot{
+  animation:rec-pulse 1.4s ease-in-out infinite;
+}
+.rec-btn.is-paused .rec-btn__dot{
+  background:#e2b53a;
+  animation:none;
+  box-shadow:none;
+}
+
+/* Pause / Stop: square, icon-only, and only in the DOM's flow while a
+   recording is open. */
+.icon-btn{
+  flex:none;
+  width:2.4rem;
+  padding:.35rem 0;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+}
+.icon-btn[hidden]{ display:none; }
+.icon-btn svg{
+  width:1.05rem; height:1.05rem;
+  fill:currentColor;
+  display:block;
+}
+.icon-btn .icon-play{ display:none; }
+.icon-btn.is-paused .icon-pause{ display:none; }
+.icon-btn.is-paused .icon-play{ display:block; }
 
 .btn.danger{
   background:linear-gradient(135deg, #e0603f, var(--sunrise-orange));
@@ -113,6 +166,46 @@ body.console{
   border:none;
 }
 .btn.danger:hover{ filter:brightness(1.06); }
+
+/* --------------------------------------------------------------------------
+   Notifications — a sandbar that arrives, says one thing, and leaves.
+   -------------------------------------------------------------------------- */
+.toast-stack{
+  position:fixed;
+  left:50%;
+  bottom:4.6rem;
+  transform:translateX(-50%);
+  z-index:40;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:.5rem;
+  pointer-events:none;
+}
+.toast{
+  max-width:min(90vw, 34rem);
+  padding:.6rem 1.1rem;
+  border-radius:999px;
+  border:1px solid var(--glass-border);
+  background:rgba(9,17,40,.92);
+  backdrop-filter:blur(12px);
+  color:var(--cloud);
+  font-size:.82rem;
+  box-shadow:0 18px 45px -25px rgba(0,0,0,.9);
+  animation:toast-in .28s ease both;
+}
+.toast.is-leaving{ animation:toast-out .35s ease both; }
+.toast[data-state="error"]{
+  border-color:rgba(224,96,63,.55);
+  color:var(--sunrise-orange);
+}
+@keyframes toast-in{
+  from{ opacity:0; transform:translateY(.9rem) scale(.97); }
+  to{ opacity:1; transform:none; }
+}
+@keyframes toast-out{
+  to{ opacity:0; transform:translateY(.5rem) scale(.98); }
+}
 
 /* --------------------------------------------------------------------------
    Body: controls rail + preview
@@ -299,8 +392,7 @@ body.console{
 
 /* The pointer sheet over the preview. Hidden unless the webpage panel is both
    previewed and live; while it is shown it swallows scrolls and clicks and the
-   console relays them to the live display. The hint text below the frame tells
-   the operator that it is armed. */
+   console relays them to the live display. */
 .preview-frame__proxy{
   position:absolute;
   inset:0;
@@ -311,71 +403,3 @@ body.console{
 .preview-frame__proxy[hidden]{ display:none; }
 .preview-frame__proxy.is-armed{ display:block; }
 
-.preview-interactive-hint{
-  flex:none;
-  margin:0;
-  font-size:.74rem;
-  color:var(--sunrise-amber);
-}
-.preview-interactive-hint[hidden]{ display:none; }
-
-/* --------------------------------------------------------------------------
-   Recording transport — console-only, sitting under the preview toolbar
-   -------------------------------------------------------------------------- */
-.rec-panel{
-  flex:none;
-  display:flex;
-  align-items:center;
-  gap:.6rem;
-  padding:.45rem .7rem;
-  border:1px solid var(--glass-border);
-  border-radius:.7rem;
-  background:rgba(248,249,253,.05);
-  font-size:.8rem;
-  color:var(--cloud-dim);
-}
-.rec-panel[hidden]{ display:none; }
-.rec-panel__dot{
-  flex:none;
-  width:.6rem; height:.6rem;
-  border-radius:50%;
-  background:#e0603f;
-  box-shadow:0 0 0 0 rgba(224,96,63,.5);
-  animation:pulse 1.4s ease-in-out infinite;
-}
-.rec-panel[data-state="paused"] .rec-panel__dot{
-  background:#e2b53a;
-  animation:none;
-}
-.rec-panel__time{
-  font-family:var(--font-display);
-  font-variant-numeric:tabular-nums;
-  font-weight:600;
-  color:var(--cloud);
-}
-.rec-panel__left{ white-space:nowrap; }
-.rec-panel__where{
-  min-width:0;
-  overflow:hidden;
-  text-overflow:ellipsis;
-  white-space:nowrap;
-  color:var(--cloud-faint);
-}
-.rec-panel__actions{
-  margin-left:auto;
-  display:flex;
-  gap:.4rem;
-}
-.rec-panel__actions .btn{
-  flex:none;
-  padding:.35rem .7rem;
-  font-size:.78rem;
-}
-.rec-status{
-  flex:none;
-  margin:0;
-  font-size:.75rem;
-  color:var(--cloud-faint);
-}
-.rec-status[hidden]{ display:none; }
-.rec-status[data-state="error"]{ color:var(--sunrise-orange); }

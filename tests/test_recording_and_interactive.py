@@ -34,6 +34,14 @@ FIXTURES = ROOT / "tests" / "fixtures"
 fails = []
 
 
+def find_ffmpeg():
+    """The repo's vendored ffmpeg first, then whatever is on PATH."""
+    local = ROOT / "bin" / "ffmpeg"
+    if local.exists():
+        return str(local)
+    return shutil.which("ffmpeg")
+
+
 def check(label, ok, detail=""):
     print(("PASS  " if ok else "FAIL  ") + label + (f"  [{detail}]" if detail else ""))
     if not ok:
@@ -394,7 +402,8 @@ def main():
             # shipped was a silent one — the pump never ended, so the mixed
             # track was never finalized and the file played with no voice. Ask
             # ffmpeg for the real level when it is available.
-            if shutil.which("ffmpeg"):
+            ffmpeg_bin = find_ffmpeg()
+            if ffmpeg_bin:
                 mp4_bytes = con.evaluate("""async () => {
                   const root = await navigator.storage.getDirectory();
                   async function mp4(dir){
@@ -415,7 +424,7 @@ def main():
                     tmp.write(base64.b64decode(mp4_bytes))
                     tmp_path = tmp.name
                 level = subprocess.run(
-                    ["ffmpeg", "-hide_banner", "-i", tmp_path, "-af", "volumedetect",
+                    [ffmpeg_bin, "-hide_banner", "-i", tmp_path, "-af", "volumedetect",
                      "-f", "null", "-"], capture_output=True, text=True).stderr
                 pathlib.Path(tmp_path).unlink(missing_ok=True)
                 m = re.search(r"mean_volume:\s*(-?\d+(?:\.\d+)?) dB", level)
@@ -461,7 +470,8 @@ def main():
             con.wait_for_timeout(7000)
             con.click("#rec-stop-btn")
             con.wait_for_timeout(6000)
-            if shutil.which("ffmpeg"):
+            ffmpeg_bin = find_ffmpeg()
+            if ffmpeg_bin:
                 mp4_bytes = con.evaluate("""async () => {
                   const root = await navigator.storage.getDirectory();
                   async function mp4(dir){
@@ -482,7 +492,7 @@ def main():
                     tmp.write(base64.b64decode(mp4_bytes))
                     tmp_path = tmp.name
                 level = subprocess.run(
-                    ["ffmpeg", "-hide_banner", "-i", tmp_path, "-af", "volumedetect",
+                    [ffmpeg_bin, "-hide_banner", "-i", tmp_path, "-af", "volumedetect",
                      "-f", "null", "-"], capture_output=True, text=True).stderr
                 pathlib.Path(tmp_path).unlink(missing_ok=True)
                 m = re.search(r"mean_volume:\s*(-?\d+(?:\.\d+)?) dB", level)
@@ -542,7 +552,8 @@ def main():
             con.click("#rec-stop-btn")
             con.wait_for_timeout(6000)
 
-            if shutil.which("ffmpeg"):
+            ffmpeg_bin = find_ffmpeg()
+            if ffmpeg_bin:
                 mp4_bytes = con.evaluate("""async () => {
                   const root = await navigator.storage.getDirectory();
                   async function mp4(dir){
@@ -563,7 +574,7 @@ def main():
                     tmp.write(base64.b64decode(mp4_bytes))
                     tmp_path = tmp.name
                 level = subprocess.run(
-                    ["ffmpeg", "-hide_banner", "-i", tmp_path, "-af", "volumedetect",
+                    [ffmpeg_bin, "-hide_banner", "-i", tmp_path, "-af", "volumedetect",
                      "-f", "null", "-"], capture_output=True, text=True).stderr
                 pathlib.Path(tmp_path).unlink(missing_ok=True)
                 m = re.search(r"mean_volume:\s*(-?\d+(?:\.\d+)?) dB", level)

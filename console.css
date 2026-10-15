@@ -167,6 +167,22 @@ body.console{
 }
 .btn.danger:hover{ filter:brightness(1.06); }
 
+/* Go Live. The same shape as Record — a dot and a label that becomes the
+   elapsed time — but the dot is red the whole time it is on air, so the two
+   are told apart at a glance when both are running. */
+.live-btn .rec-btn__dot{ background:#c62828; }
+.live-btn.is-recording{
+  border-color:#c62828;
+  color:#ff8a80;
+}
+.live-btn.is-recording .rec-btn__dot{
+  animation:live-pulse 1.4s ease-in-out infinite;
+}
+@keyframes live-pulse{
+  0%,100%{ box-shadow:0 0 0 0 rgba(198,40,40,.6); }
+  50%{ box-shadow:0 0 0 .4rem rgba(198,40,40,0); }
+}
+
 /* --------------------------------------------------------------------------
    Notifications — a sandbar that arrives, says one thing, and leaves.
    -------------------------------------------------------------------------- */

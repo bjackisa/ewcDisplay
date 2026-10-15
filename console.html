@@ -49,6 +49,17 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6.6" y="6.6" width="10.8" height="10.8" rx="2.2"/></svg>
       </button>
 
+      <!-- Go Live pushes the same display to RTMP (YouTube). Its icon-only Stop
+           appears in the same place the recording's transport does, so the top
+           bar stays a single row of controls that says everything. -->
+      <button class="btn rec-btn live-btn" id="live-btn" title="Stream the live display to RTMP, such as YouTube">
+        <span class="rec-btn__dot" id="live-dot" aria-hidden="true"></span>
+        <span class="rec-btn__label" id="live-btn-label">Go Live</span>
+      </button>
+      <button class="btn icon-btn danger" id="live-stop-btn" title="End the stream" aria-label="End the stream" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6.6" y="6.6" width="10.8" height="10.8" rx="2.2"/></svg>
+      </button>
+
       <button class="btn primary" id="launch-btn">Launch</button>
     </div>
   </header>
@@ -72,6 +83,26 @@
           <input type="password" id="ai-key-input" placeholder="Paste your Gemini API key" autocomplete="off">
           <p class="hint" id="ai-key-status"></p>
         </div>
+      </details>
+
+      <!-- Go Live settings. The stream key is a secret and stays in this
+           browser's localStorage; it is sent only to the RTMP server the
+           operator names. -->
+      <details class="ai-setup" id="stream-setup">
+        <summary>Stream settings</summary>
+        <div class="field" style="margin-top:.6rem;">
+          <label for="rtmp-url-input">Stream URL</label>
+          <input type="text" id="rtmp-url-input" placeholder="rtmp://a.rtmp.youtube.com/live2" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field" style="margin-top:.6rem;">
+          <label for="rtmp-key-input">Stream key</label>
+          <input type="password" id="rtmp-key-input" placeholder="Paste your stream key" autocomplete="off">
+        </div>
+        <div class="field" style="margin-top:.6rem;">
+          <label for="rtmp-backup-input">Backup URL</label>
+          <input type="text" id="rtmp-backup-input" placeholder="rtmp://b.rtmp.youtube.com/live2?backup=1" autocomplete="off" spellcheck="false">
+        </div>
+        <p class="hint" id="rtmp-status"></p>
       </details>
 
       <hr class="sep">

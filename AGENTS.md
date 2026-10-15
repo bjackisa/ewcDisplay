@@ -270,6 +270,43 @@ free-space estimate for this origin (`navigator.storage.estimate`), divided by
 the recording bitrate. A web page cannot read a drive's actual free space, but
 this is the room the recording actually has to grow into.
 
+## Going live to RTMP
+
+`#live-btn` (next to Record) pushes the same display to an RTMP server — YouTube
+by default (`rtmp://a.rtmp.youtube.com/live2` plus the stream key, entered under
+`#stream-setup`). A browser cannot speak RTMP, so the console encodes the
+display into a fragmented MP4 and POSTs it to the project's own `/stream`
+endpoint; `serve.py` pipes that into ffmpeg, which relays it. Video is always
+`-c copy` — the console encoded it, so re-encoding would only cost quality.
+RTMP carries AAC, and the console sends AAC wherever the platform can encode it
+(`chooseAudioCodec` probes for an AAC encoder); where it cannot, WebCodecs
+offers only Opus, and the relay transcodes the audio alone to AAC. That is the
+difference between a stream with sound and one without.
+
+**One capture, two sinks.** A recording and a stream can run at once, and the
+console takes the screen only once (`startCapture`) — one screen picker, one
+audio mix, one 4K canvas. Each sink (the muxer for a recording, the uploader for
+a stream) encodes that same canvas, so the picture recorded and the picture
+streamed are the same picture. This is why the capture object must carry
+`canvas`/`ctx`/`dx`/`dy`/`drawWidth`/`drawHeight` *flattened* onto it — the pump
+reads `capture.ctx` and `new VideoFrame(capture.canvas)`; nesting the canvas
+under `capture.canvas.canvas` makes both throw silently and produces a 0-byte
+recording *and* a 0-byte stream.
+
+**The static-ffmpeg DNS trap.** The vendored static ffmpeg links glibc's NSS
+statically, and in this container *any* hostname lookup — even `localhost` from
+`/etc/hosts` — segfaults the process before it connects. A literal IP is fine.
+`resolve_rtmp_target()` in serve.py resolves the RTMP hostname in Python and
+hands ffmpeg a literal address, while `-rtmp_tcurl` carries the real hostname in
+the connect command (so YouTube matches the stream to the key's host) and
+`-verifyhost` keeps `rtmps` certificate checking against the name. Never hand
+ffmpeg an RTMP URL with a hostname.
+
+The transport matches the recording's: the live button shows the time on air
+(`00:42`), and a single icon-only Stop sits where the recording's Pause/Stop do
+— there is no Pause, because a live stream cannot be paused. Both the button and
+the Stop hide the moment the relay ends.
+
 ## File map
 
 | File | Notes |
@@ -282,7 +319,9 @@ this is the room the recording actually has to grow into.
 | `console.base.css` | The form controls carried over from the old settings drawer. |
 | `console.css` | Control-room layout: top bar, controls rail, preview, the bottom panel picker. |
 | `landing.css` | `index.html` launcher. |
-| `serve.py` | Local http server, plus the `/proxy` the webpage panel needs. |
+| `serve.py` | Local http server, plus the `/proxy` the webpage panel needs and the `/stream` RTMP relay. |
+| `tools/get_ffmpeg.py` | Fetches a static ffmpeg into `bin/` for the relay. Not needed if ffmpeg is on the PATH. |
+| `bin/ffmpeg` / `bin/ffprobe` | The vendored static ffmpeg the relay uses. See the DNS note above before pointing ffmpeg at a hostname. |
 | `vendor/mp4-muxer.js` | Vendored mp4-muxer v5.2.1 (MIT) ŌĆö muxes WebCodecs chunks into the seekable MP4. Do not hand-edit. |
 | `bible-data.js` | KJV text, generated from `en_kjv.json` by `build_bible_data.py`. Do not hand-edit. |
 
@@ -394,6 +433,20 @@ this is the room the recording actually has to grow into.
   and stopping the capture does not end it. The pump would produce silence for ever and `finishRecording` would wait
   on it until the tab closed ŌĆö the "recording never finalises, no file" symptom.
   Stop must `cancel()` both readers explicitly.
+- **A shared capture must expose its canvas flat, not nested.** The pump reads
+  `capture.ctx.drawImage(...)` and `new VideoFrame(capture.canvas)`. If
+  `createCaptureCanvas()`'s `{canvas, ctx, ...}` is assigned as `pending.canvas`,
+  both lines get a plain object: `drawImage` throws and `VideoFrame` throws
+  "Overload resolution failed", and because the pump swallows the throw the
+  result is a 0-byte recording *and* a 0-byte stream with no error on screen.
+  `Object.assign(pending, createCaptureCanvas(...))` is the fix.
+- **The vendored static ffmpeg segfaults on any hostname lookup.** It links
+  glibc's NSS statically; in this container `localhost` (even from `/etc/hosts`)
+  and `a.rtmp.youtube.com` both crash it before a packet is sent, while a
+  literal IP works. Never hand it an RTMP URL with a hostname - resolve in
+  Python and pass the address plus `-rtmp_tcurl` (and `-verifyhost` for rtmps).
+  This is why `test_streaming.py` passed against `127.0.0.1` while a real
+  YouTube push crashed: the test never exercised a name.
 - **Rebase the pause offset exactly once.** `onChunk` subtracts `pausedMicros`
   from the chunk timestamp, and the pumps hand the encoder the *raw* capture
   timestamp. Subtracting in the pump as well double-rebases any chunk the
@@ -441,6 +494,7 @@ python3 tests/test_persistence.py       # backdrop + song persistence
 python3 tests/test_display_features.py  # type sizes + the panel modes
 python3 tests/test_ai_and_embeds.py     # AI, YouTube and the webpage panel
 python3 tests/test_recording_and_interactive.py  # recording + preview control
+python3 tests/test_streaming.py         # Go Live relay (against a local RTMP server)
 python3 tests/test_resource_use.py      # heap/CPU stay bounded
 ```
 
@@ -478,11 +532,27 @@ before the muxer has finished, and reports through a toast, that a real MP4
 that the file has a real duration and a seekable range **and can be seeked both
 backwards to the midpoint and forwards to the end** (one keyframe at the start
 would pass a forward seek and still be unusable), that the picture is 3840×2160,
-and that an audio track is present and loads. Where `ffmpeg` is on the PATH it
-goes one step further and measures the track's real level with `volumedetect`,
-because a track that exists is not the same as sound: the shipped bug was a
-silent file, the audio pump never having ended so the mixed track was never
-finalized.
+and that an audio track is present and loads. Where `ffmpeg` is on the PATH — or
+in `bin/` — it goes one step further and measures the track's real level with
+`volumedetect`, because a track that exists is not the same as sound: the
+shipped bug was a silent file, the audio pump never having ended so the mixed
+track was never finalized.
+
+`test_streaming.py` stands a real RTMP server in ffmpeg's `-listen 1` mode where
+YouTube would be, and drives the console into it with nothing stubbed but the
+screen picker. It checks the transport (Go Live shows the time on air and a
+single icon-only Stop, never a Pause), the relay's states (idle → live →
+stopped), that a recording and a stream share one capture, and then inspects
+what the RTMP server actually received: an H.264 picture at **3840×2160**, AAC
+audio, and — via `volumedetect` — audio that is really audible, since a present
+but silent track was the failure this guards against.
+
+`tests/test_live_youtube.py` is the manual end-to-end run against the real
+service, not part of the suite: given `EWC_TEST_RTMP_URL` and
+`EWC_TEST_RTMP_KEY` it streams to YouTube for a given number of seconds
+(default 180) and reports whether the relay stayed live, how many bytes left the
+machine, and that no ffmpeg crash occurred. It is the check that the DNS
+workaround really works against a named host.
 
 `test_resource_use.py` guards the cost of the heavy features: it samples the
 JS heap over time (a recording must not grow the heap ŌĆö slices go to disk as

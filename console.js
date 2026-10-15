@@ -97,6 +97,13 @@
     recordBtnLabel: document.getElementById('record-btn-label'),
     recPauseBtn: document.getElementById('rec-pause-btn'),
     recStopBtn: document.getElementById('rec-stop-btn'),
+    liveBtn: document.getElementById('live-btn'),
+    liveBtnLabel: document.getElementById('live-btn-label'),
+    liveStopBtn: document.getElementById('live-stop-btn'),
+    rtmpUrlInput: document.getElementById('rtmp-url-input'),
+    rtmpKeyInput: document.getElementById('rtmp-key-input'),
+    rtmpBackupInput: document.getElementById('rtmp-backup-input'),
+    rtmpStatus: document.getElementById('rtmp-status'),
     toastStack: document.getElementById('toast-stack'),
 
     previewNote: document.getElementById('preview-note'),
@@ -1734,7 +1741,36 @@ var REC_KEYFRAME_SECONDS = 1;
    written with a duplicate decode timestamp. */
 var REC_MIN_STEP_MICROS = Math.floor(1000000 / REC_FRAME_RATE);
 
+/* Streaming. The RTMP relay lives on the server, because no browser can speak
+   RTMP; the console encodes the same 4K picture it records and posts the
+   fragmented MP4 to /stream, which pipes it into ffmpeg. YouTube takes 4K at
+   30fps, so the same delivery size is used. The bitrate is lower than the
+   recording's because this one crosses the church's uplink and a saturated
+   uplink shows as a stutter to every viewer. */
+var STREAM_VIDEO_BPS = 12000000;
+var STREAM_AUDIO_BPS = 160000;
+var STREAM_STATUS_PATH = '/stream/status';
+var STREAM_STOP_PATH = '/stream/stop';
+var STREAM_PROBE_PATH = '/stream/probe';
+/* The relay's upload socket. A streamed `fetch` body needs HTTP/2 and the
+   church server is HTTP/1.1, so the encoded MP4 travels in WebSocket frames. */
+var STREAM_WS_PATH = '/stream/ws';
+/* Fragments are cut at a keyframe this often, so ffmpeg is never more than a
+   fragment behind and the relay's own RTMP flush has something to send. */
+var STREAM_FRAGMENT_SECONDS = 1;
+/* How much encoded video may wait for the relay before the uplink is declared
+   too slow. A few seconds of the stream bitrate: enough to ride out a hiccup,
+   little enough that the stream never falls minutes behind live. */
+var STREAM_MAX_QUEUE_BYTES = Math.round(STREAM_VIDEO_BPS / 8 * 6);
+var STREAM_KEY_STORAGE = 'ewc-display-rtmp-v1';
+var STREAM_DEFAULT_URL = 'rtmp://a.rtmp.youtube.com/live2';
+var STREAM_DEFAULT_BACKUP = 'rtmp://b.rtmp.youtube.com/live2?backup=1';
+
 var rec = null;
+var air = null;
+/* The capture both sinks share. One getDisplayMedia, one screen-picker
+   prompt, and either sink may come or go without disturbing the other. */
+var shared = null;
 
 function formatCompact(totalSeconds) {
   totalSeconds = Math.max(0, Math.floor(totalSeconds));
@@ -1838,10 +1874,32 @@ function canUseWebCodecs() {
     typeof window.Mp4Muxer === 'object';
 }
 
+/** Which audio codec the console will actually send: 'aac' where the platform
+ *  can encode it, otherwise 'opus'. The relay needs this *before* ffmpeg
+ *  starts, because it decides whether the audio is copied or transcoded, and a
+ *  stream cannot be re-planned once the socket is open. */
+function probeStreamAudioCodec() {
+  if (typeof window.AudioEncoder === 'undefined' ||
+      typeof window.AudioEncoder.isConfigSupported !== 'function') {
+    return Promise.resolve('opus');
+  }
+  return AudioEncoder.isConfigSupported({
+    codec: 'mp4a.40.2', sampleRate: 48000, numberOfChannels: 2, bitrate: 160000
+  }).then(function (res) {
+    return (res && res.supported) ? 'aac' : 'opus';
+  }).catch(function () { return 'opus'; });
+}
+
 /** The audio encoder + muxer codec pair, taken from the mixed track so the
  *  channel count and rate always match what will be fed in. Never rejects:
- *  losing the audio must not lose the video. */
-function chooseAudioCodec(track) {
+ *  losing the audio must not lose the video.
+ *
+ *  A recording may fall back to Opus, which every Chromium can encode. A
+ *  stream is fixed by what the relay was told: where the platform can encode
+ *  AAC the console sends it and the relay copies it; where it cannot, the
+ *  console sends Opus and the relay transcodes that track to AAC. FLV itself
+ *  has no Opus, so it is always AAC that leaves the server. */
+function chooseAudioCodec(track, sink, hint) {
   if (typeof window.AudioEncoder === 'undefined' ||
       typeof window.AudioEncoder.isConfigSupported !== 'function') {
     return Promise.resolve(null);
@@ -1849,10 +1907,17 @@ function chooseAudioCodec(track) {
   var settings = (track && track.getSettings) ? track.getSettings() : {};
   var channels = settings.channelCount || 2;
   var sampleRate = settings.sampleRate || 48000;
-  var candidates = [
-    { codec: 'mp4a.40.2', muxer: 'aac' },
-    { codec: 'opus', muxer: 'opus' }
-  ];
+  var candidates;
+  if (sink === 'stream') {
+    // The relay's plan was fixed when the socket opened, so this must match the
+    // codec the server was told about: the video is always copied, and the
+    // audio is copied for AAC but transcoded for Opus.
+    candidates = hint === 'opus'
+      ? [{ codec: 'opus', muxer: 'opus' }]
+      : [{ codec: 'mp4a.40.2', muxer: 'aac' }];
+  } else {
+    candidates = [{ codec: 'mp4a.40.2', muxer: 'aac' }, { codec: 'opus', muxer: 'opus' }];
+  }
   var attempts = candidates.map(function (audio) {
     return AudioEncoder.isConfigSupported({
       codec: audio.codec, sampleRate: sampleRate, numberOfChannels: channels, bitrate: 160000
@@ -2026,28 +2091,34 @@ function teardownAudioMix(mix) {
    canvas that is encoded. The monitor being recorded can be any size; the file
    is always the delivery size. */
 
-function createCompositor(captureWidth, captureHeight) {
+function createCompositor(capture) {
+  return {
+    canvas: capture.canvas,
+    draw: function (frame) {
+      try {
+        capture.ctx.drawImage(frame, capture.dx, capture.dy, capture.drawWidth, capture.drawHeight);
+      } catch (err) { /* frame closed */ }
+    }
+  };
+}
+
+/** Builds the 4K canvas both sinks encode from, plus the letterbox geometry for
+ *  the capture now in hand. One canvas means the picture recorded and the
+ *  picture streamed are the same picture. */
+function createCaptureCanvas(captureWidth, captureHeight) {
   var canvas = document.createElement('canvas');
   canvas.width = REC_TARGET_SIZES[0][0];
   canvas.height = REC_TARGET_SIZES[0][1];
-  var ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
-
-  // Fit the capture inside the canvas, centred, without distorting it. Black
-  // bars are better than a stretched service.
   var scale = Math.min(canvas.width / captureWidth, canvas.height / captureHeight);
   var drawWidth = Math.round(captureWidth * scale);
   var drawHeight = Math.round(captureHeight * scale);
-  var dx = Math.round((canvas.width - drawWidth) / 2);
-  var dy = Math.round((canvas.height - drawHeight) / 2);
-
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-
   return {
     canvas: canvas,
-    draw: function (frame) {
-      try { ctx.drawImage(frame, dx, dy, drawWidth, drawHeight); } catch (err) { /* frame closed */ }
-    }
+    ctx: canvas.getContext('2d', { alpha: false, desynchronized: true }),
+    dx: Math.round((canvas.width - drawWidth) / 2),
+    dy: Math.round((canvas.height - drawHeight) / 2),
+    drawWidth: drawWidth,
+    drawHeight: drawHeight
   };
 }
 
@@ -2062,6 +2133,32 @@ function markRecordingStarted(run) {
   refreshFreeSpace();
 }
 
+/** The muxer target for this run: a file on the chosen drive, or the RTMP
+ *  relay. Both take fragmented samples from the same encoders; only where the
+ *  bytes land differs.
+ *
+ *  A recording is a plain MP4 with its moov written last, so a player can seek
+ *  it and read its real duration. A stream is a *fragmented* MP4, because a
+ *  relay cannot wait for the end of the file to learn what is in it — and it
+ *  is handed straight to ffmpeg, which needs the fragments as they are made. */
+function muxerTargetFor(run, audio) {
+  if (run.sink === 'stream') {
+    return {
+      fastStart: 'fragmented',
+      minFragmentDuration: STREAM_FRAGMENT_SECONDS,
+      target: new window.Mp4Muxer.StreamTarget({
+        onData: function (data, position) { sendStreamBytes(run, data, position); },
+        chunkSize: 1024 * 1024
+      })
+    };
+  }
+  return {
+    fastStart: false,
+    minFragmentDuration: undefined,
+    target: new window.Mp4Muxer.FileSystemWritableFileStreamTarget(run.writer, { chunkSize: 8 * 1024 * 1024 })
+  };
+}
+
 function buildPipeline(run, audioMix) {
   var video = {
     codec: 'avc',
@@ -2069,73 +2166,157 @@ function buildPipeline(run, audioMix) {
     height: REC_TARGET_SIZES[0][1],
     frameRate: REC_FRAME_RATE
   };
-
+  var videoBps = run.sink === 'stream' ? STREAM_VIDEO_BPS : REC_VIDEO_BPS;
   var audioTrack = (audioMix && audioMix.hasAny) ? audioMix.stream.getAudioTracks()[0] : null;
 
-  return chooseAudioCodec(audioTrack).then(function (audioChoice) {
-    if (rec !== run) return;
+  return chooseAudioCodec(audioTrack, run.sink, run.audioHint).then(function (audioChoice) {
+    if (run !== rec && run !== air) return;
     if (!audioChoice || !audioTrack) audioChoice = null;
 
     var audio = audioChoice
       ? { codec: audioChoice.audio.muxer, numberOfChannels: audioChoice.channels, sampleRate: audioChoice.sampleRate }
       : undefined;
 
-    return run.folder.getFileHandle(run.fileName, { create: true })
-      .then(function (handle) { return handle.createWritable(); })
-      .then(function (writable) {
-        if (rec !== run) { try { writable.close(); } catch (e) {} return; }
-        run.writer = writable;
-        run.muxer = new window.Mp4Muxer.Muxer({
-          target: new window.Mp4Muxer.FileSystemWritableFileStreamTarget(writable, { chunkSize: 8 * 1024 * 1024 }),
-          video: video,
-          audio: audio,
-          // A plain (non-fragmented) MP4: one moov, written last, carrying the
-          // real duration and the full sample table. Slices stream to the
-          // chosen folder as they are made, so a long service never piles up in
-          // memory and a local player still reads the index to seek.
-          fastStart: false,
-          // Each track is offset independently so its own first sample is zero.
-          // The screen's video clock and the mixed audio clock are different
-          // clocks, so a shared offset would yank one track's second sample
-          // seconds away from its first and stretch the file.
-          firstTimestampBehavior: 'offset'
-        });
+    return openSink(run).then(function (ready) {
+      if (!ready) return;
+      if (run !== rec && run !== air) { closeSink(run); return; }
 
-        run.videoEncoder = new VideoEncoder({
-          output: function (chunk, meta) { onChunk(run, chunk, meta, true); },
-          error: function (e) { recordFailure(e); }
-        });
-        run.videoEncoder.configure({
-          codec: 'avc1.640033',
-          width: video.width,
-          height: video.height,
-          bitrate: REC_VIDEO_BPS,
-          framerate: REC_FRAME_RATE,
-          // 'realtime' keeps the encoder to a decode order that matches
-          // presentation order: no B-frames, so every chunk's timestamp moves
-          // forward and a frame dropped at the input leaves no hole in the
-          // reference chain. 'quality' would reorder for a little more
-          // compression, which is exactly what a screen capture cannot afford.
-          latencyMode: 'realtime'
-        });
-
-        if (audio) {
-          run.audioEncoder = new AudioEncoder({
-            output: function (chunk, meta) { onChunk(run, chunk, meta, false); },
-            // An audio glitch must never take the video down with it.
-            error: function () { run.hasAudio = false; }
-          });
-          run.audioEncoder.configure(audioChoice.config);
-          run.hasAudio = true;
-        }
-
-        // The state must say 'recording' before the pumps start: a pump drops
-        // every frame while the state is anything else, so starting first would
-        // discard the opening frames of the recording.
-        markRecordingStarted(run);
-        startCapturePumps(run, audioTrack);
+      var parts = muxerTargetFor(run, audio);
+      run.muxer = new window.Mp4Muxer.Muxer({
+        target: parts.target,
+        video: video,
+        audio: audio,
+        fastStart: parts.fastStart,
+        minFragmentDuration: parts.minFragmentDuration,
+        // Each track is offset independently so its own first sample is zero.
+        // The screen's video clock and the mixed audio clock are different
+        // clocks, so a shared offset would yank one track's second sample
+        // seconds away from its first and stretch the file.
+        firstTimestampBehavior: 'offset'
       });
+
+      run.videoEncoder = new VideoEncoder({
+        output: function (chunk, meta) { onChunk(run, chunk, meta, true); },
+        error: function (e) { sinkFailure(run, e); }
+      });
+      run.videoEncoder.configure({
+        codec: 'avc1.640033',
+        width: video.width,
+        height: video.height,
+        bitrate: videoBps,
+        framerate: REC_FRAME_RATE,
+        // 'realtime' keeps the encoder to a decode order that matches
+        // presentation order: no B-frames, so every chunk's timestamp moves
+        // forward and a frame dropped at the input leaves no hole in the
+        // reference chain. 'quality' would reorder for a little more
+        // compression, which is exactly what a screen capture cannot afford.
+        latencyMode: 'realtime'
+      });
+
+      if (audio) {
+        run.audioEncoder = new AudioEncoder({
+          output: function (chunk, meta) { onChunk(run, chunk, meta, false); },
+          // An audio glitch must never take the video down with it.
+          error: function () { run.hasAudio = false; }
+        });
+        run.audioEncoder.configure(audioChoice.config);
+        run.hasAudio = true;
+      }
+
+      markSinkStarted(run);
+    });
   });
+}
+
+/** Opens whatever the run writes to. The file sink creates the file; the
+ *  stream sink has already opened its HTTP request and only needs to know it
+ *  is ready. */
+function openSink(run) {
+  if (run.sink === 'stream') return Promise.resolve(socketOpen(run));
+  return run.folder.getFileHandle(run.fileName, { create: true })
+    .then(function (handle) { return handle.createWritable(); })
+    .then(function (writable) { run.writer = writable; return true; })
+    .catch(function (err) { sinkFailure(run, err); return false; });
+}
+
+function closeSink(run) {
+  if (run.sink === 'stream') {
+    // End the upload gracefully. The muxer has already written its last
+    // fragment, so a clean close lets the server's ffmpeg flush and
+    // disconnect; killing the socket here would cut the final fragment off.
+    if (run.ws) {
+      try { if (run.ws.readyState === 1) run.ws.close(1000); } catch (e) { /* already closed */ }
+      run.ws = null;
+    }
+    return;
+  }
+  if (run.writer) { try { run.writer.close(); } catch (e) {} run.writer = null; }
+}
+
+/** Abandons a stream outright: the socket is closed without the graceful
+ *  handshake, so the server stops reading and tears ffmpeg down at once. Used
+ *  when the stream failed, never on a normal stop. */
+function abortStream(run) {
+  if (run.ws) {
+    try { run.ws.close(); } catch (e) {}
+    run.ws = null;
+  }
+}
+
+/** Waits for the relay to report how the stream ended. The server knows before
+ *  the page does — ffmpeg's exit code is the truth — so the operator is told
+ *  what actually happened rather than "stream ended" on a stream that failed. */
+function awaitStreamEnd(run) {
+  var deadline = Date.now() + 20000;
+  function poll() {
+    return fetch(STREAM_STATUS_PATH, { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (status) {
+        if (status.state === 'failed') return { failed: status.detail || 'The relay stopped.' };
+        if (status.state === 'stopped' || status.state === 'idle') return {};
+        if (Date.now() > deadline) return {};
+        return new Promise(function (r) { setTimeout(r, 700); }).then(poll);
+      })
+      .catch(function () { return {}; });
+  }
+  return poll();
+}
+
+/** While on air, notices a relay that has died and ends the stream honestly. */
+function startLiveWatch(run) {
+  stopLiveWatch();
+  run.watch = setInterval(function () {
+    if (!run || run.finished || run.stopRequested) return;
+    fetch(STREAM_STATUS_PATH, { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (status) {
+        if (run.finished || run.stopRequested) return;
+        if (status.state === 'failed') {
+          sinkFailure(run, new Error(status.detail || 'The relay stopped.'));
+        } else if (status.state === 'idle') {
+          // No session on the server any more: the relay went away.
+          sinkFailure(run, new Error('The relay is no longer running.'));
+        }
+      })
+      .catch(function () { /* a blip in the poll is not a failure */ });
+  }, 2000);
+}
+
+function stopLiveWatch() {
+  if (air && air.watch) { clearInterval(air.watch); air.watch = null; }
+}
+
+/** The record button shows elapsed/remaining; the live button shows the time
+ *  on air. Which sink started decides which one is repainted. */
+function markSinkStarted(run) {
+  if (run.sink === 'stream') {
+    run.state = 'live';
+    setLiveButton('live');
+    startLiveTicker();
+    startLiveWatch(run);
+    return;
+  }
+  markRecordingStarted(run);
 }
 
 function onChunk(run, chunk, meta, isVideo) {
@@ -2164,15 +2345,227 @@ function onChunk(run, chunk, meta, isVideo) {
   } catch (err) { /* finalize raced the last chunk */ }
 }
 
-function startCapturePumps(run, audioTrack) {
-  var vproc = new MediaStreamTrackProcessor({ track: run.stream.getVideoTracks()[0] });
-  run.videoReader = vproc.readable.getReader();
-  run.videoDone = pumpVideo(run);
-  if (run.hasAudio && audioTrack) {
-    var aproc = new MediaStreamTrackProcessor({ track: audioTrack });
-    run.audioReader = aproc.readable.getReader();
-    run.audioDone = pumpAudio(run);
+/* ------------------------------------------------------- capture and pumps
+
+   One screen capture feeds every sink. A sink is one destination for the
+   picture — a file on a drive, or the RTMP relay — and each has its own
+   encoders and muxer. Recording and streaming can therefore run together or
+   one at a time, and starting or stopping either leaves the other untouched.
+
+   The capture itself is the only shared object: one getDisplayMedia, one
+   screen-picker prompt, one audio mix, one 4K canvas that both sinks encode
+   from. That is what keeps the two outputs identical in content rather than
+   merely similar. */
+
+function activeSinks() {
+  return [rec, air].filter(function (run) { return !!run && !run.stopRequested; });
+}
+
+function anyPumping() {
+  return activeSinks().some(function (run) { return run.state === 'recording' || run.state === 'live'; });
+}
+
+/** True while any sink is between 'starting' and 'finishing' — the window in
+ *  which the shared capture must be kept. */
+function captureInUse() {
+  return [rec, air].some(function (run) { return !!run && !run.finished; });
+}
+
+function ensureCapture(primed) {
+  // A capture that failed is not reusable: the sink that asked for it reports
+  // the failure and releases it, but if a second sink arrives in the same
+  // instant it must not inherit the dead capture.
+  if (shared && shared.failed) { releaseCapture(); }
+  if (shared) return Promise.resolve(shared);
+  var pending = {
+    ready: false, failed: null, stream: null, audioMix: null,
+    videoProc: null, videoReader: null, videoDone: null,
+    audioProc: null, audioReader: null, audioDone: null,
+    canvas: null, ctx: null, frame: null, tick: null,
+    videoTrack: null, audioTrack: null
+  };
+  shared = pending;
+
+  // The audio mix asks for the microphone, which is a second prompt; it is
+  // built first so both prompts are answered before the capture starts.
+  return navigator.mediaDevices.getDisplayMedia({
+    video: {
+      width: { ideal: REC_TARGET_SIZES[0][0] },
+      height: { ideal: REC_TARGET_SIZES[0][1] },
+      frameRate: { ideal: REC_FRAME_RATE }
+    },
+    audio: true,
+    // Ask for the whole screen, so the projector's monitor is captured full
+    // screen rather than one window.
+    preferCurrentTab: false,
+    selfBrowserSurface: 'exclude',
+    surfaceSwitching: 'include',
+    systemAudio: 'include'
+  }).then(function (stream) {
+    pending.stream = stream;
+    pending.videoTrack = stream.getVideoTracks()[0] || null;
+    return buildAudioMix(stream, primed);
+  }).then(function (mix) {
+    pending.audioMix = mix;
+    if (!pending.videoTrack) throw new Error('No screen video was shared.');
+    var settings = pending.videoTrack.getSettings();
+    // One 4K canvas for the whole capture: it is letterboxed from the
+    // monitor's own size, and every sink encodes this same canvas, so the
+    // picture recorded and the picture streamed are the same picture.
+    Object.assign(pending, createCaptureCanvas(settings.width || 1920, settings.height || 1080));
+    pending.audioTrack = (mix && mix.hasAny) ? mix.stream.getAudioTracks()[0] : null;
+    // One reader for the whole capture. A reader cannot be shared, so the
+    // frames are read here and drawn onto the canvas once; each sink then
+    // encodes that same canvas.
+    var vproc = new MediaStreamTrackProcessor({ track: pending.videoTrack });
+    pending.videoProc = vproc;
+    pending.videoReader = vproc.readable.getReader();
+    pending.videoDone = pumpCapture(pending);
+    if (pending.audioTrack) {
+      var aproc = new MediaStreamTrackProcessor({ track: pending.audioTrack });
+      pending.audioProc = aproc;
+      pending.audioReader = aproc.readable.getReader();
+      pending.audioDone = pumpCaptureAudio(pending);
+    }
+    pending.ready = true;
+    return pending;
+  }).catch(function (err) {
+    // A refused screen share, or a capture that could not start: tell every
+    // sink that is waiting, then let go.
+    pending.failed = err;
+    pending.ready = true;
+    return pending;
+  });
+}
+
+/** Reads the capture once, paints each frame onto the shared canvas, and tells
+ *  every live sink to encode the canvas at the capture's own timestamp.
+ *
+ *  Dropping is deliberate: when an encoder's queue is deep the frame is skipped
+ *  rather than queued, so a 4K screen the software encoder cannot keep up with
+ *  falls behind instead of stretching the output. Frames closer together than
+ *  one frame period are dropped too, because the muxer times the video track in
+ *  units of the declared frame rate and two frames inside one unit would share
+ *  a decode timestamp. */
+function pumpCapture(capture) {
+  function loop() {
+    return capture.videoReader.read().then(function (res) {
+      if (res.done) return;
+      var frame = res.value;
+      var sinks = activeSinks().filter(function (run) {
+        return (run.state === 'recording' || run.state === 'live') &&
+          run.videoEncoder && run.videoEncoder.state === 'configured' &&
+          run.videoEncoder.encodeQueueSize <= 8;
+      });
+      if (!sinks.length) {
+        frame.close();
+        return loop();
+      }
+      capture.frame = frame.timestamp;
+      var at = frame.timestamp - (sinks[0].pausedMicros || 0);
+      // Too close to the last painted frame: drop it rather than let a sink
+      // write a duplicate decode timestamp.
+      if (capture.lastPaintedTs >= 0 && at - capture.lastPaintedTs < REC_MIN_STEP_MICROS) {
+        frame.close();
+        return loop();
+      }
+      capture.lastPaintedTs = at;
+      try {
+        capture.ctx.drawImage(frame, capture.dx, capture.dy, capture.drawWidth, capture.drawHeight);
+      } catch (err) { /* frame closed */ }
+      var rawTimestamp = frame.timestamp;
+      frame.close();
+      sinks.forEach(function (run) {
+        var keyFrame = run.lastKeyFrameTs < -1e15 || run.forceKeyFrame ||
+          ((rawTimestamp - run.pausedMicros) - run.lastKeyFrameTs) >= REC_KEYFRAME_SECONDS * 1000000;
+        if (keyFrame) run.lastKeyFrameTs = rawTimestamp - run.pausedMicros;
+        run.forceKeyFrame = false;
+        try {
+          var out = new VideoFrame(capture.canvas, { timestamp: rawTimestamp });
+          run.videoEncoder.encode(out, { keyFrame: keyFrame });
+          out.close();
+        } catch (err) { /* encoder closed */ }
+      });
+      return loop();
+    }).catch(function () { /* track ended or reader released */ });
   }
+  return loop();
+}
+
+function pumpCaptureAudio(capture) {
+  function loop() {
+    return capture.audioReader.read().then(function (res) {
+      if (res.done) return;
+      var data = res.value;
+      var sinks = activeSinks().filter(function (run) {
+        return (run.state === 'recording' || run.state === 'live') &&
+          run.hasAudio && run.audioEncoder && run.audioEncoder.state === 'configured';
+      });
+      sinks.forEach(function (run) {
+        try {
+          run.audioEncoder.encode(data);
+        } catch (err) { /* closed */ }
+      });
+      data.close();
+      if (sinks.some(function (run) { return run.audioEncoder.encodeQueueSize > 16; })) {
+        return new Promise(function (r) { setTimeout(r, 4); }).then(loop);
+      }
+      return loop();
+    }).catch(function () { /* track ended or reader released */ });
+  }
+  return loop();
+}
+
+function releaseCapture() {
+  if (!shared) return;
+  var capture = shared;
+  shared = null;
+  if (capture.videoReader) { try { capture.videoReader.cancel(); } catch (e) {} }
+  if (capture.audioReader) { try { capture.audioReader.cancel(); } catch (e) {} }
+  if (capture.stream) capture.stream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) {} });
+  teardownAudioMix(capture.audioMix);
+}
+
+/** Ends a run: stop its encoders, flush them, hold the last frame if the audio
+ *  outlasts the video, and finalize the muxer. For a file that is the moov and
+ *  the last slices going to disk; for a stream it is the final fragment and the
+ *  end of the upload. This is the pause after Stop — the sink works on while
+ *  the console carries on.
+ *
+ *  The encoders are flushed *before* the tail is measured, because a flushed
+ *  encoder is the only point at which the last chunk of each track has actually
+ *  been emitted and their end times are final. */
+function finishSink(run) {
+  run.state = 'finishing';
+  if (run.sink === 'stream') stopLiveTicker(); else stopRecTicker();
+  var videoDone = run.videoDone || Promise.resolve();
+  var audioDone = run.audioDone || Promise.resolve();
+  var pauseFlush = run.pauseFlush || Promise.resolve();
+  pauseFlush.catch(function () {})
+    .then(function () { return Promise.all([videoDone, audioDone]); })
+    .then(function () {
+      if (run.videoEncoder && run.videoEncoder.state === 'configured') return run.videoEncoder.flush();
+    })
+    .then(function () {
+      if (run.audioEncoder && run.audioEncoder.state === 'configured') return run.audioEncoder.flush();
+    })
+    .then(function () {
+      // The audio pump usually stops a fraction of a second after the video one.
+      // Hold the last frame for that much longer so both tracks end together
+      // instead of the video finishing short.
+      run.audioTailMs = Math.max(0,
+        (run.lastAudioTs + run.lastAudioDuration) - (run.lastVideoTs + run.lastVideoDuration));
+      return holdLastFrame(run);
+    })
+    .then(function () {
+      if (run.videoEncoder && run.videoEncoder.state === 'configured') return run.videoEncoder.flush();
+    })
+    .then(function () {
+      if (run.muxer) run.muxer.finalize();
+      return closeSink(run);
+    })
+    .then(function () { finishUp(run, null); })
+    .catch(function (err) { finishUp(run, err); });
 }
 
 /** Holds the last captured frame on the glass for a moment after the capture
@@ -2204,179 +2597,99 @@ function holdLastFrame(run) {
   });
 }
 
-/** Reads one captured frame at a time, draws it onto the 4K canvas, and encodes
- *  the canvas. Frames that arrive while paused are dropped, so the pause leaves
- *  no frozen stretch in the file.
- *
- *  Two things keep the file honest when the encoder cannot keep up with a 4K
- *  screen — which software encoding usually cannot:
- *
- *    * the timestamp comes from the *capture* clock (the frame's own), not from
- *      a frame counter, so a dropped frame leaves a gap rather than quietly
- *      shortening the recording; and
- *    * when the encoder's queue is deep, frames are dropped instead of queued.
- *      The picture falls behind the screen by design — the operator carries on
- *      regardless — and the file keeps its true duration and its 4K size
- *      rather than either stretching or degrading.
- *
- *  Frames closer together than one frame period are dropped too. The muxer
- *  times the video track in units of the declared frame rate, so two frames
- *  inside the same unit would be written with the same decode timestamp — an
- *  invalid file that a player reads as a stall. Dropping the extra frame keeps
- *  the track at a true 30fps and every timestamp distinct.
- *
- *  A keyframe every REC_KEYFRAME_SECONDS is what makes the finished file
- *  seekable. */
-function pumpVideo(run) {
-  function loop() {
-    return run.videoReader.read().then(function (res) {
-      if (res.done) return;
-      var frame = res.value;
-      // Anything other than a live recording — starting, paused, finishing —
-      // drops the frame. The pump only starts once the state is 'recording',
-      // so nothing is lost at the beginning either.
-      if (run.state !== 'recording' || !run.videoEncoder || run.videoEncoder.state === 'closed') {
-        frame.close();
-        return loop();
-      }
-      // The pump works in *file* time (raw capture time minus the time spent
-      // paused) for its own decisions, but hands the encoder the raw capture
-      // timestamp: the pause offset is applied once, in onChunk, so a chunk the
-      // encoder buffers across a pause cannot be rebased twice.
-      var at = frame.timestamp - run.pausedMicros;
-      // Too close to the last encoded frame (a burst, or the join after a
-      // pause): drop it rather than write a duplicate decode timestamp.
-      if (run.lastEncodeTs >= 0 && at - run.lastEncodeTs < REC_MIN_STEP_MICROS) {
-        frame.close();
-        return loop();
-      }
-      // Behind? Drop this frame rather than grow the queue without bound.
-      if (run.videoEncoder.encodeQueueSize > 8) {
-        frame.close();
-        return loop();
-      }
-
-      run.compositor.draw(frame);
-      var rawTimestamp = frame.timestamp;
-      frame.close();
-      run.lastEncodeTs = at;
-
-      var keyFrame = run.lastKeyFrameTs < -1e15 || run.forceKeyFrame ||
-        (at - run.lastKeyFrameTs) >= REC_KEYFRAME_SECONDS * 1000000;
-      if (keyFrame) run.lastKeyFrameTs = at;
-      run.forceKeyFrame = false;
-
-      try {
-        var out = new VideoFrame(run.compositor.canvas, { timestamp: rawTimestamp });
-        run.videoEncoder.encode(out, { keyFrame: keyFrame });
-        out.close();
-      } catch (err) { /* encoder closed */ }
-      return loop();
-    }).catch(function () { /* track ended or reader released */ });
-  }
-  return loop();
-}
-
-function pumpAudio(run) {
-  function loop() {
-    return run.audioReader.read().then(function (res) {
-      if (res.done) return;
-      var data = res.value;
-      if (run.state !== 'recording' || !run.audioEncoder || run.audioEncoder.state === 'closed') {
-        data.close();
-        return loop();
-      }
-      try { run.audioEncoder.encode(data); } catch (err) { /* closed */ }
-      data.close();
-      if (run.audioEncoder.encodeQueueSize > 16) {
-        return new Promise(function (r) { setTimeout(r, 4); }).then(loop);
-      }
-      return loop();
-    }).catch(function () { /* track ended or reader released */ });
-  }
-  return loop();
-}
-
-/** Ends a run: stop capture, let the pumps finish, flush the encoders, hold the
- *  last frame if the audio outlasts the video, write the final moov and close
- *  the file. This is the pause after Stop — the index and the last slices are
- *  still going to disk.
- *
- *  Both readers are cancelled outright rather than left to end when the capture
- *  stops: the audio reader is on the *mixed* track, which is not part of the
- *  capture stream, so it would go on producing silence for ever and nothing
- *  below would ever run.
- *
- *  The order matters. The encoders are flushed *before* the tail is measured,
- *  because a flushed encoder is the only point at which the last chunk of each
- *  track has actually been emitted and their end times are final. */
-function finishRecording(run) {
-  stopRecTicker();
-  run.state = 'finishing';
-  if (run.videoReader) { try { run.videoReader.cancel(); } catch (e) {} }
-  if (run.audioReader) { try { run.audioReader.cancel(); } catch (e) {} }
-  if (run.stream) run.stream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) {} });
-  var videoDone = run.videoDone || Promise.resolve();
-  var audioDone = run.audioDone || Promise.resolve();
-  // A Stop while paused must not race the pause flush: both write through the
-  // same encoder, and the final flush has to come after it.
-  var pauseFlush = run.pauseFlush || Promise.resolve();
-  pauseFlush.catch(function () {})
-    .then(function () { return Promise.all([videoDone, audioDone]); })
-    .then(function () {
-      if (run.videoEncoder && run.videoEncoder.state === 'configured') return run.videoEncoder.flush();
-    })
-    .then(function () {
-      if (run.audioEncoder && run.audioEncoder.state === 'configured') return run.audioEncoder.flush();
-    })
-    .then(function () {
-      // The audio pump usually stops a fraction of a second after the video one.
-      // Hold the last frame for that much longer so both tracks end together
-      // instead of the video finishing short.
-      run.audioTailMs = Math.max(0,
-        (run.lastAudioTs + run.lastAudioDuration) - (run.lastVideoTs + run.lastVideoDuration));
-      return holdLastFrame(run);
-    })
-    .then(function () {
-      if (run.videoEncoder && run.videoEncoder.state === 'configured') return run.videoEncoder.flush();
-    })
-    .then(function () {
-      if (run.muxer) run.muxer.finalize();
-      return run.writer ? run.writer.close() : null;
-    })
-    .then(function () { if (rec === run) finishUp(run, null); })
-    .catch(function (err) { if (rec === run) recordFailure(err); });
-}
-
 /** Releases everything a run held and reports the result. The notification is
  *  the only thing the operator sees; the full path is in its tooltip. */
 function finishUp(run, error) {
-  stopRecTicker();
-  teardownAudioMix(run.audioMix);
-  rec = null;
-  setRecordButton(null);
-  if (error) { toast('Recording failed: ' + ((error && error.message) || error), true); return; }
+  if (run.sink === 'stream') { stopLiveTicker(); stopLiveWatch(); } else { stopRecTicker(); }
+  run.finished = true;
+  if (run.sink === 'stream') {
+    if (air === run) { air = null; setLiveButton(null); }
+    // A failed stream must be aborted so the server stops reading; a normal end
+    // has already closed the body in finishSink.
+    if (error) abortStream(run);
+  } else {
+    if (rec === run) { rec = null; setRecordButton(null); }
+    closeSink(run);
+  }
+  if (!captureInUse()) releaseCapture();
+  if (error) {
+    toast((run.sink === 'stream' ? 'Stream failed: ' : 'Recording failed: ') +
+      ((error && error.message) || error), true);
+    return;
+  }
+  if (run.sink === 'stream') {
+    // The server, not the page, knows whether ffmpeg relayed cleanly, so the
+    // operator is told the truth a moment later rather than "stream ended".
+    awaitStreamEnd(run).then(function (result) {
+      if (result.failed) toast('Stream failed: ' + result.failed, true);
+      else toast('Stream ended.');
+    });
+    return;
+  }
   toast('Saved ' + run.folderName + '/' + run.fileName);
 }
 
-function recordFailure(err) {
-  var run = rec;
-  if (run && run.stream) run.stream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) {} });
-  if (run) {
-    [run.videoEncoder, run.audioEncoder].forEach(function (enc) {
-      if (enc && enc.state !== 'closed') { try { enc.close(); } catch (e) {} }
-    });
-    if (run.writer) { try { run.writer.close(); } catch (e) {} }
-    stopRecTicker();
-    teardownAudioMix(run.audioMix);
-    rec = null;
-    setRecordButton(null);
-  }
+/** A sink could not start or died: release it, keep the other one going, and
+ *  let go of the capture only when nothing is left using it. */
+function sinkFailure(run, err) {
+  if (!run || run.finished) return;
+  [run.videoEncoder, run.audioEncoder].forEach(function (enc) {
+    if (enc && enc.state !== 'closed') { try { enc.close(); } catch (e) {} }
+  });
+  finishUp(run, err || new Error('The sink stopped.'));
+}
+
+/** The operator-facing reason a capture failed. */
+function captureFailureMessage(err) {
   var name = err && err.name;
-  if (name === 'NotAllowedError') toast('Recording was cancelled — no screen was shared.', true);
-  else if (name === 'NotSupportedError') toast('This browser cannot record the screen.', true);
-  else if (name === 'AbortError') toast('The folder picker was dismissed.', true);
-  else toast('Could not record: ' + ((err && err.message) || err), true);
+  if (name === 'NotAllowedError') return 'No screen was shared.';
+  if (name === 'NotSupportedError') return 'This browser cannot capture the screen.';
+  if (name === 'AbortError') return 'The picker was dismissed.';
+  return (err && err.message) || String(err);
+}
+
+/** A run's mutable state. Both sinks share the shape; only the target differs. */
+function newRun(sink, extra) {
+  var run = {
+    sink: sink,
+    state: 'starting',
+    stopRequested: false,
+    finished: false,
+    hasAudio: false,
+    written: 0,
+    muxer: null,
+    videoEncoder: null,
+    audioEncoder: null,
+    videoDone: null,
+    audioDone: null,
+    compositor: null,
+    pausedMicros: 0,
+    pauseWallAt: null,
+    pauseFlush: null,
+    forceKeyFrame: false,
+    lastKeyFrameTs: -Infinity,
+    lastEncodeTs: -1,
+    lastVideoTs: -1,
+    lastAudioTs: -1,
+    lastVideoDuration: 0,
+    lastAudioDuration: 0,
+    audioTailMs: 0
+  };
+  Object.keys(extra || {}).forEach(function (k) { run[k] = extra[k]; });
+  return run;
+}
+
+/** Brings a run up on the shared capture and starts its encoders. */
+function startSink(run, primed) {
+  return ensureCapture(primed).then(function (capture) {
+    if (capture.failed) throw capture.failed;
+    if (run.stopRequested) return;
+    run.compositor = createCompositor(capture);
+    return buildPipeline(run, capture.audioMix);
+  }).catch(function (err) {
+    if (run.stopRequested) return;
+    sinkFailure(run, err);
+  });
 }
 
 function startRecording() {
@@ -2395,82 +2708,34 @@ function startRecording() {
     return;
   }
 
-  // Both the folder picker and the screen picker need a user gesture. Ask for
-  // the folder first — that is the choice the operator made — then for the
-  // screen. A rejection at either step cancels cleanly.
-  //
-  // The audio graph's AudioContext is created here, synchronously in the click
-  // handler, because Chrome will only start one that was created (or resumed)
-  // under a user gesture. Built later, after the pickers have awaited, it can
-  // be born suspended, and a suspended context's MediaStreamDestination emits
-  // silence — a file with a track that plays as nothing.
+  // The folder picker needs a user gesture, and so does the AudioContext — it
+  // is created here, synchronously, because Chrome will only start one created
+  // under a gesture. Built later, after the pickers have awaited, it can be born
+  // suspended, and a suspended context's MediaStreamDestination emits silence.
   var primed = primeAudioContext();
-  window.showDirectoryPicker({ mode: 'readwrite', id: 'ewc-display-recordings' })
-    .then(function (dir) { return openRecording(dir, primed); })
-    .catch(function (err) {
-      if (primed) teardownContext(primed);
-      recordFailure(err);
-    });
-}
-
-function openRecording(dir, primed) {
   var startedAt = new Date();
-  var run = {
+  var run = newRun('file', {
     startedAt: startedAt,
     folderName: recordingFolderName(startedAt),
     fileName: recordingFileName(startedAt),
-    dir: dir, folder: null, written: 0,
-    freeBytes: null, pausedTotal: 0, pausedAt: null, state: 'starting',
-    stream: null, tick: null,
-    stopRequested: false, finished: false,
-    muxer: null, writer: null, videoEncoder: null, audioEncoder: null,
-    videoReader: null, audioReader: null, videoDone: null, audioDone: null,
-    hasAudio: false, pausedMicros: 0, pauseWallAt: null, pauseFlush: null, forceKeyFrame: false,
-    lastKeyFrameTs: -Infinity, lastEncodeTs: -1, lastVideoTs: -1, lastAudioTs: -1,
-    lastVideoDuration: 0, lastAudioDuration: 0, audioTailMs: 0,
-    compositor: null, audioMix: null
-  };
+    dir: null, folder: null, freeBytes: null, pausedTotal: 0, pausedAt: null, tick: null,
+    audioMix: null
+  });
   rec = run;
 
-  // Create the dated folder inside the one the operator chose, then start
-  // capturing. Every step reports its own failure so a refused screen share is
-  // not reported as a folder problem, and vice versa.
-  return dir.getDirectoryHandle(run.folderName, { create: true })
-    .then(function (folder) {
-      run.folder = folder;
-      return navigator.mediaDevices.getDisplayMedia({
-        video: {
-          width: { ideal: REC_TARGET_SIZES[0][0] },
-          height: { ideal: REC_TARGET_SIZES[0][1] },
-          frameRate: { ideal: REC_FRAME_RATE }
-        },
-        audio: true,
-        // Ask for the whole screen, so the projector's monitor is captured full
-        // screen rather than one window.
-        preferCurrentTab: false,
-        selfBrowserSurface: 'exclude',
-        surfaceSwitching: 'include',
-        systemAudio: 'include'
+  window.showDirectoryPicker({ mode: 'readwrite', id: 'ewc-display-recordings' })
+    .then(function (dir) {
+      if (rec !== run) return null;
+      run.dir = dir;
+      return dir.getDirectoryHandle(run.folderName, { create: true }).then(function (folder) {
+        run.folder = folder;
+        return startSink(run, primed);
       });
     })
-    .then(function (stream) {
-      if (rec !== run) { stream.getTracks().forEach(function (t) { t.stop(); }); return; }
-      run.stream = stream;
-      // The operator can also stop sharing from the browser's own bar; that
-      // ends the recording exactly as the Stop button does.
-      stream.getVideoTracks().forEach(function (track) {
-        track.addEventListener('ended', function () { if (rec) stopRecording(); });
-      });
-      return buildAudioMix(stream, primed);
-    })
-    .then(function (mix) {
-      if (rec !== run) { teardownAudioMix(mix); return; }
-      run.audioMix = mix;
-      var settings = run.stream.getVideoTracks()[0].getSettings();
-      run.compositor = createCompositor(settings.width || 1920, settings.height || 1080);
-      return buildPipeline(run, mix);
-    })
-    .catch(recordFailure);
+    .catch(function (err) {
+      if (primed) teardownContext(primed);
+      if (rec === run) sinkFailure(run, err);
+    });
 }
 
 function pauseRecording() {
@@ -2520,8 +2785,288 @@ function stopRecording() {
   // close run on in the background while the console carries on, and the
   // finished file reports itself through a toast.
   setRecordButton(null);
-  finishRecording(run);
+  finishSink(run);
 }
+
+/* ======================================================================
+   13b. GO LIVE — RTMP
+   A browser cannot speak RTMP, so the console encodes the same 4K picture it
+   records into a fragmented MP4 and posts it to this project's own server,
+   which pipes it into ffmpeg to relay to YouTube. The stream key is the
+   operator's, kept in this browser and sent only to that relay.
+   ====================================================================== */
+
+/** The RTMP URL, with the key appended. YouTube's ingest is
+ *  `<url>/<key>`, and a backup URL carries its own query string, so the key
+ *  goes on the end of whichever base the operator chose. */
+function composeRtmpUrl(base, key) {
+  base = (base || '').trim().replace(/\/+$/, '');
+  key = (key || '').trim();
+  if (!base) return '';
+  return key ? base + '/' + key : base;
+}
+
+function loadStreamSettings() {
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem(STREAM_KEY_STORAGE) || 'null'); } catch (e) { saved = null; }
+  saved = saved || {};
+  if (el.rtmpUrlInput) el.rtmpUrlInput.value = saved.url || STREAM_DEFAULT_URL;
+  if (el.rtmpBackupInput) el.rtmpBackupInput.value = saved.backup || STREAM_DEFAULT_BACKUP;
+  if (el.rtmpKeyInput) el.rtmpKeyInput.value = saved.key || '';
+}
+
+function saveStreamSettings() {
+  try {
+    localStorage.setItem(STREAM_KEY_STORAGE, JSON.stringify({
+      url: el.rtmpUrlInput ? el.rtmpUrlInput.value.trim() : '',
+      backup: el.rtmpBackupInput ? el.rtmpBackupInput.value.trim() : '',
+      key: el.rtmpKeyInput ? el.rtmpKeyInput.value.trim() : ''
+    }));
+  } catch (e) { /* private mode; the settings simply do not persist */ }
+}
+
+function setStreamStatus(message, isError) {
+  if (!el.rtmpStatus) return;
+  el.rtmpStatus.textContent = message || '';
+  el.rtmpStatus.classList.toggle('is-error', !!isError);
+}
+
+/** Asks the server whether it can relay at all, once, and says so plainly. A
+ *  missing ffmpeg is the one failure worth knowing before a service starts. */
+function probeStreamRelay() {
+  fetch(STREAM_PROBE_PATH, { cache: 'no-store' })
+    .then(function (r) { return r.json(); })
+    .then(function (info) {
+      if (info && info.ffmpeg && info.rtmp) {
+        setStreamStatus('Relay ready.', false);
+      } else if (info && info.ffmpeg) {
+        setStreamStatus('This server\'s ffmpeg has no RTMP support.', true);
+      } else {
+        setStreamStatus('No ffmpeg on the server, so Go Live cannot relay.', true);
+      }
+    })
+    .catch(function () { /* served from file://; Go Live will say so itself */ });
+}
+
+/** The one stream the server will accept. Whatever the URL resolves to, the
+ *  relay reports the same state either way. */
+function startLive() {
+  if (air) return; // already on air; End Stream is how you stop
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+    toast('This browser cannot capture the screen.', true);
+    return;
+  }
+  if (!canUseWebCodecs()) {
+    toast('This browser cannot encode the stream.', true);
+    return;
+  }
+
+  var url = composeRtmpUrl(el.rtmpUrlInput ? el.rtmpUrlInput.value : '', el.rtmpKeyInput ? el.rtmpKeyInput.value : '');
+  if (!url) { toast('Enter a stream URL and key first.', true); return; }
+  saveStreamSettings();
+
+  var primed = primeAudioContext();
+  var run = newRun('stream', { startedAt: new Date(), socket: null, audioMix: null });
+  air = run;
+  setLiveButton('connecting');
+
+  // Which audio the console will send is settled before the socket opens: the
+  // relay fixes its ffmpeg arguments then, and cannot change them mid-stream.
+  probeStreamAudioCodec().then(function (audioCodec) {
+    if (air !== run) return;
+    run.audioHint = audioCodec;
+    return openStreamSocket(run, url, audioCodec);
+  }).then(function () {
+    if (air !== run) return;
+    return startSink(run, primed);
+  }).catch(function (err) {
+    if (primed) teardownContext(primed);
+    if (air !== run) return;
+    air = null;
+    setLiveButton(null);
+    toast('Could not start the stream: ' + captureFailureMessage(err), true);
+  });
+}
+
+/** Opens the relay socket and resolves once the server has accepted it, having
+ *  told it which audio codec to expect. */
+function openStreamSocket(run, url, audioCodec) {
+  var started;
+  try {
+    started = createStreamUpload(run, url, audioCodec);
+  } catch (err) {
+    throw new Error((err && err.message) || err);
+  }
+  return started;
+}
+
+/** Opens the relay socket the muxer writes into, and returns a promise that
+ *  resolves once the server has accepted it.
+ *
+ *  This is a WebSocket, not a streamed `fetch`. A streaming request body needs
+ *  HTTP/2 — Chromium refuses a ReadableStream body over HTTP/1.1 with
+ *  ERR_ALPN_NEGOTIATION_FAILED — and the church server is HTTP/1.1. A
+ *  WebSocket is the transport meant for a continuous browser-to-server byte
+ *  pipe over HTTP/1.1, so the encoded video travels in binary frames and the
+ *  server unwraps them into ffmpeg. */
+function createStreamUpload(run, url, audioCodec) {
+  var ws = new WebSocket(streamSocketUrl());
+  ws.binaryType = 'arraybuffer';
+  run.ws = ws;
+  run.queued = [];
+  run.queuedBytes = 0;
+
+  var settled = false;
+  var ready = new Promise(function (resolve, reject) {
+    ws.onopen = function () {
+      // The first message is the target; a header cannot be read after the
+      // handshake reply is already on the wire, so the URL goes first. The
+      // audio codec rides with it: the relay decides there whether to copy or
+      // transcode the audio track, and that cannot change once ffmpeg is up.
+      ws.send(JSON.stringify({ url: url, audio: audioCodec || 'aac' }));
+    };
+    ws.onmessage = function (event) {
+      var hello = {};
+      try { hello = JSON.parse(event.data); } catch (e) { /* not our json */ }
+      if (hello.state === 'ready' && !settled) {
+        settled = true;
+        resolve({ ready: true, socket: ws });
+        flushStreamQueue(run);
+      }
+    };
+    ws.onerror = function () {
+      if (settled) return;
+      settled = true;
+      reject(new Error('The relay refused the stream.'));
+    };
+    ws.onclose = function () {
+      if (settled) return;
+      settled = true;
+      // The server closed instead of saying "ready": read the reason from
+      // the status endpoint, which the relay sets before closing.
+      fetch(STREAM_STATUS_PATH, { cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(function (status) {
+          reject(new Error(status.detail || 'The relay refused the stream.'));
+        })
+        .catch(function () { reject(new Error('The relay refused the stream.')); });
+    };
+  });
+
+  // A tiny grace period lets the server's ready arrive before the first bytes;
+  // it does not gate the frames, it only orders the status the operator sees.
+  var delay = new Promise(function (r) { setTimeout(r, 250); });
+  return Promise.all([ready, delay]).then(function (parts) { return parts[0]; });
+}
+
+/** The relay's WebSocket URL on this origin, http or https. */
+function streamSocketUrl() {
+  var scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return scheme + '//' + location.host + STREAM_WS_PATH;
+}
+
+/** The muxer's output hook. Bytes go straight to the socket once the relay has
+ *  accepted it; before that they are queued, but only briefly.
+ *
+ *  If the socket's send buffer passes a few seconds of video, the church's
+ *  uplink cannot keep up. Growing it without bound would trade a stutter for a
+ *  heap blow-up and a stream that is minutes behind live, so the stream is
+ *  ended with a plain reason instead. A stream that cannot keep up is better
+ *  stopped than left to rot. */
+function sendStreamBytes(run, data, position) {
+  if (!run || run.stopRequested || run.finished) return;
+  if (!socketOpen(run)) {
+    run.queued.push(data);
+    run.queuedBytes += data.byteLength;
+    if (run.queuedBytes > STREAM_MAX_QUEUE_BYTES) {
+      sinkFailure(run, new Error('The uplink cannot keep up with the stream.'));
+    }
+    return;
+  }
+  flushStreamQueue(run);
+  if (run.ws.bufferedAmount > STREAM_MAX_QUEUE_BYTES) {
+    sinkFailure(run, new Error('The uplink cannot keep up with the stream.'));
+    return;
+  }
+  writeStreamChunk(run, data);
+}
+
+/** Whether the relay socket is open and past the handshake. */
+function socketOpen(run) {
+  return !!run.ws && run.ws.readyState === 1;
+}
+
+function flushStreamQueue(run) {
+  if (!run.queued.length || !socketOpen(run)) return;
+  var queued = run.queued;
+  run.queued = [];
+  run.queuedBytes = 0;
+  queued.forEach(function (data) { writeStreamChunk(run, data); });
+}
+
+function writeStreamChunk(run, data) {
+  try {
+    run.ws.send(data);
+  } catch (err) {
+    // The reader is gone: the relay died. Nothing more can be sent.
+    if (!run.stopRequested) sinkFailure(run, new Error('The relay stopped reading the stream.'));
+  }
+}
+
+/** Ends the stream: the muxer writes its final fragment, the upload ends, and
+ *  the server's ffmpeg flushes and disconnects. The relay keeps working after
+ *  the button returns to rest, so the console carries on. */
+function stopLive() {
+  if (!air || air.stopRequested) return;
+  var run = air;
+  run.stopRequested = true;
+  setLiveButton(null);
+  finishSink(run);
+}
+
+function setLiveButton(state) {
+  if (!el.liveBtn) return;
+  var active = state === 'live' || state === 'connecting';
+  el.liveBtn.classList.toggle('is-recording', active);
+  el.liveStopBtn.hidden = state !== 'live';
+  if (state === 'connecting') {
+    el.liveBtnLabel.textContent = 'Connecting…';
+  } else if (state === 'live') {
+    el.liveBtnLabel.textContent = '0:00';
+  } else {
+    el.liveBtnLabel.textContent = 'Go Live';
+  }
+}
+
+function startLiveTicker() {
+  stopLiveTicker();
+  air.tick = setInterval(function () {
+    if (!air) return;
+    var elapsed = (Date.now() - air.startedAt) / 1000;
+    el.liveBtnLabel.textContent = formatCompact(elapsed);
+  }, 1000);
+}
+
+function stopLiveTicker() {
+  if (air && air.tick) { clearInterval(air.tick); air.tick = null; }
+}
+
+el.liveBtn.addEventListener('click', function () {
+  if (air) {
+    if (air.stopRequested) toast('Still ending the stream…');
+    else stopLive();
+    return;
+  }
+  startLive();
+});
+el.liveStopBtn.addEventListener('click', function () {
+  if (!air || air.stopRequested) return;
+  stopLive();
+});
+[el.rtmpUrlInput, el.rtmpKeyInput, el.rtmpBackupInput].forEach(function (input) {
+  if (input) input.addEventListener('change', saveStreamSettings);
+});
 
 el.recordBtn.addEventListener('click', function () {
   if (rec) {
@@ -2540,10 +3085,17 @@ el.recStopBtn.addEventListener('click', function () {
   stopRecording();
 });
 
-// Leaving the page tears the capture down; the encoder is flushed as the page
-// unloads so the file is not left without its index.
+// Leaving the page tears the capture down; the encoders are flushed as the page
+// unloads so a file is not left without its index and the relay is not left
+// waiting for bytes that will never come.
 window.addEventListener('beforeunload', function () {
-  if (rec && rec.muxer) { try { rec.muxer.finalize(); } catch (err) {} }
+  [rec, air].forEach(function (run) {
+    if (!run) return;
+    if (run.muxer) { try { run.muxer.finalize(); } catch (err) {} }
+    if (run.sink === 'stream' && run.ws) {
+      try { if (run.ws.readyState === 1) run.ws.close(1000); } catch (err) {}
+    }
+  });
 });
   /* ==========================================================================
      14. KEYBOARD SHORTCUTS
@@ -2569,6 +3121,8 @@ window.addEventListener('beforeunload', function () {
   function init() {
     loadPersisted();
     loadSongs();
+    loadStreamSettings();
+    probeStreamRelay();
 
     el.eventNameInput.value = preview.eventName;
     el.targetDatetimeInput.value = EWC.toDatetimeLocalValue(new Date(preview.targetISO));

@@ -191,12 +191,31 @@ requirement is a Chromium-based desktop browser ŌĆö the File System Access AP
 (`showDirectoryPicker`) does not exist in Firefox or Safari, and the console
 says so rather than half-working.
 
-Every frame is composited onto a 3840├Ś2160 canvas before encoding, so the file
+Every frame is composited onto a 3840×2160 canvas before encoding, so the file
 is 4K whatever the operator's monitor is. Audio is a *mix*, not just the screen's
 own sound: `buildAudioMix` sums the captured audio with the microphone
 (`getUserMedia`, gained up) through one Web Audio graph, so the room's sound and
 the preacher's voice are both in the file and losing either one does not lose the
 recording.
+
+Two traps make a file that carries an audio track and still plays as silence.
+Both bite the real-world case — a screen shared over HDMI, where the share
+carries no system audio and the microphone is the only source:
+
+- **A single source must skip the graph.** With only the microphone (or only the
+  screen) present, its own `MediaStreamTrack` goes straight to the encoder
+  (`bareAudio`). Routing a lone track through a `MediaStreamDestination` is a
+  needless dependency on an `AudioContext` — and a *suspended* context's
+  destination emits nothing at all: no samples, no error, silence.
+- **The graph's `AudioContext` must be created under a gesture.**
+  `buildAudioMix` runs after `showDirectoryPicker` and `getDisplayMedia` have
+  awaited, so by then there is no live user gesture and Chrome's autoplay policy
+  can leave the context `suspended`; `resume()` cannot revive it without a
+  gesture. `primeAudioContext()` therefore creates it synchronously in the
+  Record click handler and `buildAudioMix` adopts it, building a fresh
+  destination per run. If it is still not `running`, the graph is abandoned for
+  the screen's own audio rather than trusted, because a mute track is worse than
+  no track.
 
 The recording is written through **WebCodecs** (`VideoEncoder`/`AudioEncoder` +
 the vendored `vendor/mp4-muxer.js`, MIT). Screen frames and audio are pulled
@@ -285,9 +304,9 @@ this is the room the recording actually has to grow into.
 ## Gotchas learned the hard way
 
 - **`#stage` is a flex item of `<body>`.** In preview mode it must keep
-  `flex:none`, or the default `flex-shrink` squashes the 1600├Ś900 layout box
+  `flex:none`, or the default `flex-shrink` squashes the 1600×900 layout box
   and the 16:9 frame breaks before the scale transform even runs.
-- **Preview transform leaves the layout box at 1600├Ś900**, so `body.is-preview`
+- **Preview transform leaves the layout box at 1600×900**, so `body.is-preview`
   needs `overflow:hidden` or the iframe grows a phantom scrollbar.
 - **Revisions are per console session.** A console refresh restarts its
   revision counter at 0; the display compares `message.session` first and
@@ -369,10 +388,10 @@ this is the room the recording actually has to grow into.
   offset yanks one track's second sample seconds away from its first. Use
   `'offset'` (per-track), and rebase encoder output on the monotonic guard
   rather than a fragile input-to-output timestamp map.
-- **A reader on the mixed audio track never ends on its own.** `buildAudioMix`
-  returns a *new* `MediaStream` from a `MediaStreamDestination`, so its audio
-  track is not part of the capture stream and stopping the capture does not end
-  it. The pump would produce silence for ever and `finishRecording` would wait
+- **A reader on the mixed audio track never ends on its own.** When two sources
+  are summed, `buildAudioMix` returns a *new* `MediaStream` from a
+  `MediaStreamDestination`, so its audio track is not part of the capture stream
+  and stopping the capture does not end it. The pump would produce silence for ever and `finishRecording` would wait
   on it until the tab closed ŌĆö the "recording never finalises, no file" symptom.
   Stop must `cancel()` both readers explicitly.
 - **Rebase the pause offset exactly once.** `onChunk` subtracts `pausedMicros`
@@ -458,7 +477,7 @@ before the muxer has finished, and reports through a toast, that a real MP4
 (`ftyp` box) lands in the dated folder,
 that the file has a real duration and a seekable range **and can be seeked both
 backwards to the midpoint and forwards to the end** (one keyframe at the start
-would pass a forward seek and still be unusable), that the picture is 3840├Ś2160,
+would pass a forward seek and still be unusable), that the picture is 3840×2160,
 and that an audio track is present and loads. Where `ffmpeg` is on the PATH it
 goes one step further and measures the track's real level with `volumedetect`,
 because a track that exists is not the same as sound: the shipped bug was a

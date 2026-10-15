@@ -1870,56 +1870,142 @@ function chooseAudioCodec(track) {
 
 /* -------------------------------------------------------------------- audio
 
-   One mixed track: the screen's own audio (what the room hears) summed with the
-   microphone (what the speaker says). Either may be missing and the mix still
-   works, because the recording is worth more than its soundtrack. */
+   One track: the screen's own audio (what the room hears) summed with the
+   microphone (what the speaker says). Either may be missing and the recording
+   still works, because the recording is worth more than its soundtrack.
 
-function buildAudioMix(stream) {
-  var AudioCtor = window.AudioContext || window.webkitAudioContext;
-  if (!AudioCtor) return Promise.resolve(null);
+   Two traps are avoided here, both of which produce a file that carries a track
+   but plays as silence — which is exactly how a recording with no sound gets
+   made even though the microphone was granted.
 
-  var context = new AudioCtor({ sampleRate: 48000 });
-  var destination = context.createMediaStreamDestination();
-  var sources = [];
+   1. A single source needs no mixer at all. When only the microphone (or only
+      the screen) is present, its own MediaStreamTrack goes straight to the
+      encoder. Routing it through a Web Audio graph would be a needless
+      dependency on an AudioContext that Chrome may hold suspended, and a
+      suspended context's MediaStreamDestination emits nothing at all: no
+      samples, no error, silence.
 
-  function addSource(track, gainValue) {
-    if (!track) return;
-    try {
-      var source = context.createMediaStreamSource(new MediaStream([track]));
-      var gain = context.createGain();
-      gain.gain.value = gainValue;
-      source.connect(gain);
-      gain.connect(destination);
-      sources.push({ source: source, gain: gain });
-    } catch (err) { /* a track the graph cannot take is simply not mixed */ }
-  }
+   2. When there really are two sources, the context must actually be running.
+      It is created after the folder and screen pickers have awaited, so there
+      is no live user gesture by then and Chrome's autoplay policy can leave it
+      'suspended'. resume() cannot revive it without a gesture, so the graph is
+      built inside the click handler instead (primeAudioContext) and adopted
+      here; if even that failed, the graph is abandoned rather than trusted. */
 
-  addSource(stream.getAudioTracks()[0], 1);   // the screen's own audio
+function buildAudioMix(stream, primedContext) {
+  var screenTrack = stream.getAudioTracks()[0] || null;
+  var context = (primedContext && primedContext.state !== 'closed') ? primedContext : null;
 
-  // The microphone is optional and may need permission; ask quietly, and carry
-  // on with screen audio alone if it is refused or absent.
-  var mic = (navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
-    ? navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-      }).then(function (micStream) {
-        addSource(micStream.getAudioTracks()[0], 1.4);
-        return micStream;
-      }).catch(function () { return null; })
-    : Promise.resolve(null);
+  return requestMic().then(function (mic) {
+    var micTrack = mic && mic.stream ? mic.stream.getAudioTracks()[0] : null;
 
-  return mic.then(function (micStream) {
-    var resume = context.state === 'suspended' ? context.resume() : Promise.resolve();
-    return resume.catch(function () {}).then(function () {
+    // One source: hand it over untouched. No graph, no context, no silence.
+    if (micTrack && !screenTrack) return bareAudio(mic, micTrack);
+    if (screenTrack && !micTrack) return bareAudio(null, screenTrack);
+
+    // No source at all.
+    if (!micTrack && !screenTrack) {
+      if (mic) stopStream(mic.stream);
+      return null;
+    }
+
+    // Two sources: they must be summed, which does need the graph. A fresh
+    // destination each run, so one run stopping its track cannot disarm the
+    // shared context for the next.
+    if (!context) {
+      // The context never came up. A silent file is worse than no track, so
+      // keep the screen's own audio and say nothing about the microphone.
+      if (mic) stopStream(mic.stream);
+      return bareAudio(null, screenTrack);
+    }
+
+    var destination = context.createMediaStreamDestination();
+    var sources = [];
+    addSource(context, destination, screenTrack, 1, sources);
+    addSource(context, destination, micTrack, 1.4, sources);
+    return ensureRunning(context).then(function (ok) {
+      if (!ok) {
+        // Still suspended: the graph would emit silence. Fall back to one
+        // source rather than write a mute track.
+        sources.forEach(function (s) { try { s.source.disconnect(); } catch (e) {} });
+        if (mic) stopStream(mic.stream);
+        return bareAudio(null, screenTrack);
+      }
       return {
         context: context,
         destination: destination,
         stream: destination.stream,
         sources: sources,
-        micStream: micStream,
-        hasAny: sources.length > 0
+        micStream: mic ? mic.stream : null,
+        hasAny: true
       };
     });
   });
+}
+
+/** A mix that is a single source handed straight to the encoder. */
+function bareAudio(mic, track) {
+  return {
+    context: null,
+    destination: null,
+    stream: new MediaStream([track]),
+    sources: [],
+    micStream: mic ? mic.stream : null,
+    hasAny: true
+  };
+}
+
+function addSource(context, destination, track, gainValue, into) {
+  if (!track) return;
+  try {
+    var source = context.createMediaStreamSource(new MediaStream([track]));
+    var gain = context.createGain();
+    gain.gain.value = gainValue;
+    source.connect(gain);
+    gain.connect(destination);
+    into.push({ source: source, gain: gain });
+  } catch (err) { /* a track the graph cannot take is simply not mixed */ }
+}
+
+/** A context that was born suspended cannot be resumed without a gesture, so
+ *  try once and report honestly whether it is running. */
+function ensureRunning(context) {
+  if (context.state === 'running') return Promise.resolve(true);
+  var resume = context.resume ? context.resume().catch(function () {}) : Promise.resolve();
+  return resume.then(function () { return context.state === 'running'; });
+}
+
+function stopStream(stream) {
+  if (stream) stream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) {} });
+}
+
+function teardownContext(context) {
+  if (context && context.state !== 'closed') { try { context.close(); } catch (e) {} }
+}
+
+/** Asks for the microphone, tolerating a refusal or an absent device. */
+function requestMic() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    return Promise.resolve(null);
+  }
+  return navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+  }).then(function (stream) { return { stream: stream }; })
+    .catch(function () { return null; });
+}
+
+/** Built inside the click handler, where a user gesture is live, so Chrome
+ *  starts the context rather than suspending it. Adopted by buildAudioMix. */
+function primeAudioContext() {
+  var AudioCtor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtor) return null;
+  try {
+    var context = new AudioCtor({ sampleRate: 48000 });
+    if (context.state === 'suspended' && context.resume) {
+      context.resume().catch(function () {});
+    }
+    return context;
+  } catch (err) { return null; }
 }
 
 function teardownAudioMix(mix) {
@@ -1930,7 +2016,8 @@ function teardownAudioMix(mix) {
   });
   if (mix.micStream) mix.micStream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) {} });
   try { mix.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (err) {}
-  if (mix.context && mix.context.state !== 'closed') { try { mix.context.close(); } catch (err) {} }
+  // The AudioContext is primed once for the page and reused by every run, so a
+  // run never closes it — closing it would silence the next recording.
 }
 
 /* ------------------------------------------------------------------- canvas
@@ -2311,12 +2398,22 @@ function startRecording() {
   // Both the folder picker and the screen picker need a user gesture. Ask for
   // the folder first — that is the choice the operator made — then for the
   // screen. A rejection at either step cancels cleanly.
+  //
+  // The audio graph's AudioContext is created here, synchronously in the click
+  // handler, because Chrome will only start one that was created (or resumed)
+  // under a user gesture. Built later, after the pickers have awaited, it can
+  // be born suspended, and a suspended context's MediaStreamDestination emits
+  // silence — a file with a track that plays as nothing.
+  var primed = primeAudioContext();
   window.showDirectoryPicker({ mode: 'readwrite', id: 'ewc-display-recordings' })
-    .then(function (dir) { return openRecording(dir); })
-    .catch(recordFailure);
+    .then(function (dir) { return openRecording(dir, primed); })
+    .catch(function (err) {
+      if (primed) teardownContext(primed);
+      recordFailure(err);
+    });
 }
 
-function openRecording(dir) {
+function openRecording(dir, primed) {
   var startedAt = new Date();
   var run = {
     startedAt: startedAt,
@@ -2364,7 +2461,7 @@ function openRecording(dir) {
       stream.getVideoTracks().forEach(function (track) {
         track.addEventListener('ended', function () { if (rec) stopRecording(); });
       });
-      return buildAudioMix(stream);
+      return buildAudioMix(stream, primed);
     })
     .then(function (mix) {
       if (rec !== run) { teardownAudioMix(mix); return; }

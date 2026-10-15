@@ -430,6 +430,147 @@ def main():
                   disp.evaluate("document.querySelectorAll('#display [id*=\"rec\"], #display [class*=\"rec\"]')"
                                 ".length") == 0)
 
+            # ---- both sources: system audio and the microphone are summed ----
+            # The other branch of the mix. A screen share that *does* carry its
+            # own audio must still be summed with the microphone through the
+            # Web Audio graph, and the result must be audible.
+            con.evaluate("""() => {
+              const actx = new AudioContext({ sampleRate: 48000 });
+              actx.resume();
+              const dest = actx.createMediaStreamDestination();
+              const osc = actx.createOscillator();
+              osc.frequency.value = 440;
+              const g = actx.createGain(); g.gain.value = 0.4;
+              osc.connect(g); g.connect(dest); osc.start();
+              const v = document.createElement('canvas');
+              v.width = 640; v.height = 360;
+              v.getContext('2d').fillRect(0, 0, 640, 360);
+              const stream = new MediaStream([
+                v.captureStream(30).getVideoTracks()[0],
+                dest.stream.getAudioTracks()[0]
+              ]);
+              navigator.mediaDevices.getDisplayMedia = async () => stream;
+            }""")
+            con.evaluate("""async () => {
+              const root = await navigator.storage.getDirectory();
+              for await (const [name] of root.entries()) {
+                await root.removeEntry(name, { recursive: true });
+              }
+            }""")
+            con.click("#record-btn")
+            con.wait_for_timeout(7000)
+            con.click("#rec-stop-btn")
+            con.wait_for_timeout(6000)
+            if shutil.which("ffmpeg"):
+                mp4_bytes = con.evaluate("""async () => {
+                  const root = await navigator.storage.getDirectory();
+                  async function mp4(dir){
+                    for await (const [name, h] of dir.entries()){
+                      if (h.kind === 'directory'){ const r = await mp4(h); if (r) return r; }
+                      else if (name.endsWith('.mp4')) return await h.getFile();
+                    }
+                    return null;
+                  }
+                  const f = await mp4(root);
+                  const buf = new Uint8Array(await f.arrayBuffer());
+                  let s = '';
+                  for (let i = 0; i < buf.length; i++) s += String.fromCharCode(buf[i]);
+                  return btoa(s);
+                }""")
+                import base64, tempfile
+                with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+                    tmp.write(base64.b64decode(mp4_bytes))
+                    tmp_path = tmp.name
+                level = subprocess.run(
+                    ["ffmpeg", "-hide_banner", "-i", tmp_path, "-af", "volumedetect",
+                     "-f", "null", "-"], capture_output=True, text=True).stderr
+                pathlib.Path(tmp_path).unlink(missing_ok=True)
+                m = re.search(r"mean_volume:\s*(-?\d+(?:\.\d+)?) dB", level)
+                mean_db = float(m.group(1)) if m else None
+                check("system audio and the microphone are summed into one track",
+                      mean_db is not None and mean_db > -60, f"{mean_db} dB mean")
+
+            # ---- the real-world case: no system audio, suspended context ----
+            # A machine sharing a screen over HDMI usually has no system-audio
+            # track at all, so the microphone is the only source — and Chrome
+            # may hold the AudioContext suspended because it was created after
+            # the pickers awaited. A suspended context's MediaStreamDestination
+            # emits nothing, so routing a lone microphone through it produced a
+            # file with an audio track that played as silence. The microphone
+            # must now reach the file either way.
+            con.evaluate("""() => {
+              // A screen share that carries no audio, as an HDMI share does.
+              const fake = new MediaStream([(() => {
+                const c = document.createElement('canvas');
+                c.width = 640; c.height = 360;
+                const ctx = c.getContext('2d');
+                ctx.fillStyle = '#123'; ctx.fillRect(0, 0, 640, 360);
+                return c.captureStream(30).getVideoTracks()[0];
+              })()]);
+              navigator.mediaDevices.getDisplayMedia = async () => fake;
+              // A Web Audio graph that cannot run: the context is suspended
+              // (no gesture can revive it) and its destination is a track that
+              // never produces a single sample. This is what a suspended
+              // context really does to a recording — the graph yields silence,
+              // not an error — so a lone microphone routed through it would
+              // reach the file as nothing at all.
+              window.AudioContext = function () {
+                return {
+                  state: 'suspended',
+                  resume: () => Promise.resolve(),
+                  close: () => Promise.resolve(),
+                  createMediaStreamDestination: () => ({
+                    stream: new MediaStream([
+                      new MediaStreamTrackGenerator({ kind: 'audio' })
+                    ])
+                  }),
+                  createMediaStreamSource: () => ({ connect() {}, disconnect() {} }),
+                  createGain: () => ({ gain: { value: 0 }, connect() {}, disconnect() {} })
+                };
+              };
+            }""")
+            # Clear the earlier recording out of the way so the measurement
+            # below can only be of the recording this section makes.
+            con.evaluate("""async () => {
+              const root = await navigator.storage.getDirectory();
+              for await (const [name] of root.entries()) {
+                await root.removeEntry(name, { recursive: true });
+              }
+            }""")
+            con.click("#record-btn")
+            con.wait_for_timeout(7000)
+            con.click("#rec-stop-btn")
+            con.wait_for_timeout(6000)
+
+            if shutil.which("ffmpeg"):
+                mp4_bytes = con.evaluate("""async () => {
+                  const root = await navigator.storage.getDirectory();
+                  async function mp4(dir){
+                    for await (const [name, h] of dir.entries()){
+                      if (h.kind === 'directory'){ const r = await mp4(h); if (r) return r; }
+                      else if (name.endsWith('.mp4')) return await h.getFile();
+                    }
+                    return null;
+                  }
+                  const f = await mp4(root);
+                  const buf = new Uint8Array(await f.arrayBuffer());
+                  let s = '';
+                  for (let i = 0; i < buf.length; i++) s += String.fromCharCode(buf[i]);
+                  return btoa(s);
+                }""")
+                import base64, tempfile
+                with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+                    tmp.write(base64.b64decode(mp4_bytes))
+                    tmp_path = tmp.name
+                level = subprocess.run(
+                    ["ffmpeg", "-hide_banner", "-i", tmp_path, "-af", "volumedetect",
+                     "-f", "null", "-"], capture_output=True, text=True).stderr
+                pathlib.Path(tmp_path).unlink(missing_ok=True)
+                m = re.search(r"mean_volume:\s*(-?\d+(?:\.\d+)?) dB", level)
+                mean_db = float(m.group(1)) if m else None
+                check("a screen share with no system audio still records the mic",
+                      mean_db is not None and mean_db > -60, f"{mean_db} dB mean")
+
             print()
             print("page errors:", errs)
             check("no page errors anywhere", not errs)

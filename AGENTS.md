@@ -335,7 +335,7 @@ the Stop hide the moment the relay ends.
 | `console.css` | Control-room layout: top bar, controls rail, preview, the bottom panel picker. |
 | `landing.css` | `index.html` launcher. |
 | `serve.py` | Local http server, plus the `/proxy` the webpage panel needs and the `/stream` RTMP relay. |
-| `tools/get_ffmpeg.py` | Fetches a static ffmpeg into `bin/` for the relay. Not needed if ffmpeg is on the PATH. |
+| `tools/get_ffmpeg.py` | Fetches a static ffmpeg/ffprobe into `bin/` for the relay, for the platform it runs on (Linux `bin/ffmpeg`, Windows `bin/ffmpeg.exe`, macOS). `--platform` fetches another platform's build. Not needed if ffmpeg is on the PATH. |
 | `bin/ffmpeg` / `bin/ffprobe` | The vendored static ffmpeg the relay uses. See the DNS note above before pointing ffmpeg at a hostname. |
 | `vendor/mp4-muxer.js` | Vendored mp4-muxer v5.2.1 (MIT) ŌĆö muxes WebCodecs chunks into the seekable MP4. Do not hand-edit. |
 | `bible-data.js` | KJV text, generated from `en_kjv.json` by `build_bible_data.py`. Do not hand-edit. |

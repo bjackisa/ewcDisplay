@@ -1,1 +1,7 @@
 __pycache__/
+# ffmpeg/ffprobe are large (~77 MB each) and platform-specific. Fetch them with
+# tools/get_ffmpeg.py; they are kept on disk but never committed.
+bin/ffmpeg
+bin/ffmpeg.exe
+bin/ffprobe
+bin/ffprobe.exe

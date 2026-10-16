@@ -310,10 +310,10 @@ def main():
                   con.inner_text("#record-btn-label") == "Record")
             toast = con.evaluate("Array.from(document.querySelectorAll('.toast'))"
                                  ".map(t=>t.textContent).join(' | ')")
-            check("a notification reports the saved file instead of a status line",
-                  "Saved" in toast, toast)
-            check("the notification names a dated folder and an .mp4",
-                  bool(re.search(r"\d{2}-\d{2}-\d{4}-[a-z]{5}/\S+\.mp4", toast)), toast)
+            check("a notification reports the recording, not the file path",
+                  "saved" in toast.lower(), toast)
+            check("the notification carries no file path",
+                  not re.search(r"\d{2}-\d{2}-\d{4}-[a-z]{5}/\S+\.mp4", toast), toast)
 
             final = con.evaluate(DUMP_OPFS)
             sizes = {k: v for k, v in final.items() if k.endswith(".mp4")}

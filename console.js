@@ -2626,7 +2626,7 @@ function finishUp(run, error) {
     });
     return;
   }
-  toast('Saved ' + run.folderName + '/' + run.fileName);
+  toast('Recording saved');
 }
 
 /** A sink could not start or died: release it, keep the other one going, and

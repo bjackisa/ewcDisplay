@@ -17,6 +17,14 @@ playwright install chromium
 python3 tests/test_console_display.py
 python3 tests/test_persistence.py
 python3 tests/test_display_features.py
+python3 tests/test_ai_and_embeds.py
+python3 tests/test_recording_and_interactive.py
+python3 tests/test_streaming.py
+python3 tests/test_aac_muxing.py            # needs node + ffmpeg
+python3 tests/test_ffmpeg_resolution.py     # needs nothing
+python3 tests/test_resource_use.py
+python3 tests/test_real_record_stream.py    # needs a real headed browser + ffmpeg
+python3 tests/test_real_stream_display.py   # needs a real headed browser + ffmpeg
 ```
 
 Each prints a `PASS`/`FAIL` line per check and exits non-zero on failure. They
@@ -54,3 +62,17 @@ be run from any directory.
   display opens
 - per-mode control visibility and every panel mode (media, camera, text,
   No Panel, editing a song's lyrics)
+
+`test_aac_muxing.py`
+
+- drives the vendored muxer with real AAC frames and no browser, because Linux
+  Chromium has no AAC encoder and so the whole suite only ever exercises Opus —
+  the untested path is where the Windows silent-file bug lived
+- proves a *wrong* encoder description really does make the audio undecodable,
+  and that the console's own AudioSpecificConfig keeps it audible
+
+`test_ffmpeg_resolution.py`
+
+- `find_ffmpeg()` skips a stale Linux `bin/ffmpeg` on Windows and picks the
+  runnable `bin/ffmpeg.exe`, and reports nothing when the only binary cannot run
+- `get_ffmpeg.py` deletes the stale extensionless name but keeps the `.exe`

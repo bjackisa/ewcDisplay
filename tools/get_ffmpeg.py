@@ -169,6 +169,25 @@ def run_quiet(path: pathlib.Path, *args: str) -> str:
         return ""
 
 
+def remove_stale_names(binary: str, key: str) -> None:
+    """Delete a wrong-platform leftover for a binary from this host's `bin/`.
+
+    The only case that matters is Windows: an extensionless `bin/ffmpeg` there
+    can only be a Linux or macOS build left by an older version of this tool,
+    and Windows will never run it. serve.py skips a binary it cannot run, but
+    removing the leftover keeps the "Go Live" report honest. A correct file is
+    never touched."""
+    target = TARGET_DIR / binary_name(binary, key)
+    stale = TARGET_DIR / binary
+    if stale == target or not stale.exists():
+        return
+    try:
+        stale.unlink()
+        print("Removed the stale %s" % stale)
+    except OSError as exc:
+        print("Could not remove %s (%s)" % (stale, exc))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--force", action="store_true",
@@ -179,6 +198,13 @@ def main() -> int:
     args = parser.parse_args()
 
     key = args.platform or platform_key()
+    # The host's own build key, or '' when this machine has no listed build. The
+    # capability check only makes sense for the host's build, and a cross-fetch
+    # must not touch the host's files.
+    try:
+        host_key = platform_key()
+    except SystemExit:
+        host_key = ""
     ffmpeg_target = TARGET_DIR / binary_name("ffmpeg", key)
     if ffmpeg_target.exists() and not args.force:
         print("%s already exists. Use --force to replace it." % ffmpeg_target)
@@ -199,7 +225,11 @@ def main() -> int:
             if not extract(archive, binary, target):
                 print("Warning: %s was not found in %s." % (binary, url))
                 continue
-            if not key.startswith("windows"):
+            # Only the host's own Windows bin can hold a leftover it cannot run.
+            # A cross-fetch (--platform) must never delete the host's working copy.
+            if key.startswith("windows") and key == host_key:
+                remove_stale_names(binary, key)
+            elif not key.startswith("windows"):
                 target.chmod(target.stat().st_mode
                              | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
@@ -210,10 +240,6 @@ def main() -> int:
     # The capability check only makes sense for this machine's own build; a
     # cross-platform fetch cannot be executed here, so skip it rather than
     # report a false failure.
-    try:
-        host_key = platform_key()
-    except SystemExit:
-        host_key = ""
     if key != host_key:
         print("Fetched the %s build; run it on a %s machine." % (key, key))
         return 0

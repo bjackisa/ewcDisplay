@@ -216,6 +216,19 @@ carries no system audio and the microphone is the only source:
   destination per run. If it is still not `running`, the graph is abandoned for
   the screen's own audio rather than trusted, because a mute track is worse than
   no track.
+- **The AAC description is ours, not the encoder's.** mp4-muxer seeds a correct
+  guessed `AudioSpecificConfig` when the track is created, but then overrides it
+  with whatever the encoder puts in each chunk's `decoderConfig`. An AAC encoder
+  that supplies a *wrong* description — a wrong object type, a wrong channel
+  count, or an ADTS header where a raw frame is expected — writes a broken
+  `esds` and the audio will not decode: the file looks right and plays silent.
+  `chooseAudioCodec` builds the two-byte config from the same rate and channels
+  the encoder is configured with and `onChunk` hands it to the muxer for every
+  AAC chunk, so the `esds` is right whatever the encoder says. Opus is left
+  alone: its `dOps` box reads preskip and gain from the encoder's own
+  description. This is the one bug the Linux suite cannot see — Linux Chromium
+  has no AAC encoder, so every test there runs the Opus path — which is why
+  `tests/test_aac_muxing.py` drives the muxer directly.
 
 The recording is written through **WebCodecs** (`VideoEncoder`/`AudioEncoder` +
 the vendored `vendor/mp4-muxer.js`, MIT). Screen frames and audio are pulled
@@ -462,6 +475,15 @@ the Stop hide the moment the relay ends.
   Python and pass the address plus `-rtmp_tcurl` (and `-verifyhost` for rtmps).
   This is why `test_streaming.py` passed against `127.0.0.1` while a real
   YouTube push crashed: the test never exercised a name.
+- **`bin/ffmpeg` on Windows may be another platform's build.** An older
+  `get_ffmpeg.py` fetched the Linux build everywhere, so a Windows `bin/` could
+  hold a Linux ELF named `ffmpeg` next to a working `ffmpeg.exe`. `find_ffmpeg()`
+  trusted the first path that *existed*, so the relay picked the ELF, could not
+  execute it (Windows: `WinError 193`), reported "no RTMP support" and refused
+  every stream — "The relay refused the stream" — while a perfectly good
+  `ffmpeg.exe` sat beside it. It now skips a candidate that will not *run*, and
+  `get_ffmpeg.py` deletes the extensionless leftover on Windows. The current
+  `get_ffmpeg.py` fetches the host's own build (`bin/ffmpeg.exe` on Windows).
 - **The stream key goes on the *path*, before any query.** A YouTube backup URL
   is `.../live2?backup=1`, and appending the key the naive way gives
   `.../live2?backup=1/KEY`, which the ingest reads as a query value and rejects.
@@ -525,6 +547,8 @@ python3 tests/test_display_features.py  # type sizes + the panel modes
 python3 tests/test_ai_and_embeds.py     # AI, YouTube and the webpage panel
 python3 tests/test_recording_and_interactive.py  # recording + preview control
 python3 tests/test_streaming.py         # Go Live relay (against a local RTMP server)
+python3 tests/test_aac_muxing.py        # AAC recording path (node + ffmpeg, no browser)
+python3 tests/test_ffmpeg_resolution.py # relay ffmpeg must be one this host can run
 python3 tests/test_resource_use.py      # heap/CPU stay bounded
 python3 tests/test_real_record_stream.py   # record + stream the REAL display together
 python3 tests/test_real_stream_display.py  # stream the REAL display alone

@@ -1898,6 +1898,40 @@ function probeStreamAudioCodec() {
   }).catch(function () { return 'opus'; });
 }
 
+/** Returns the first config the platform can encode, or null when none is.
+ *  Tried in order so a build that predates an optional extension still works.
+ *  Resolves with the config as it was written, not the one the browser echoes
+ *  back, so an extension it accepted is the extension it is configured with. */
+function tryConfigs(configs) {
+  var i = 0;
+  function next() {
+    if (i >= configs.length) return Promise.resolve(null);
+    var config = configs[i++];
+    return AudioEncoder.isConfigSupported(config).then(function (res) {
+      return (res && res.supported) ? config : next();
+    }).catch(function () { return next(); });
+  }
+  return next();
+}
+
+/** The two-byte AudioSpecificConfig for AAC-LC, from the same sample rate and
+ *  channel count the encoder is configured with. The muxer writes it into the
+ *  track's `esds`; a missing or wrong description there is what makes an MP4
+ *  that looks correct and plays silent. */
+function buildAacAudioSpecificConfig(sampleRate, channels) {
+  var rates = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050,
+               16000, 12000, 11025, 8000, 7350];
+  var index = rates.indexOf(sampleRate);
+  if (index < 0) index = 4; // 44100, the MPEG-4 default frequency index
+  var bits = '00010' // object type 2: AAC-LC
+    + index.toString(2).padStart(4, '0')
+    + (channels & 0x0f).toString(2).padStart(4, '0');
+  bits = bits.padEnd(Math.ceil(bits.length / 8) * 8, '0');
+  var out = new Uint8Array(bits.length / 8);
+  for (var i = 0; i < bits.length; i += 8) out[i / 8] = parseInt(bits.slice(i, i + 8), 2);
+  return out;
+}
+
 /** The audio encoder + muxer codec pair, taken from the mixed track so the
  *  channel count and rate always match what will be fed in. Never rejects:
  *  losing the audio must not lose the video.
@@ -1927,13 +1961,35 @@ function chooseAudioCodec(track, sink, hint) {
     candidates = [{ codec: 'mp4a.40.2', muxer: 'aac' }, { codec: 'opus', muxer: 'opus' }];
   }
   var attempts = candidates.map(function (audio) {
-    return AudioEncoder.isConfigSupported({
+    var base = {
       codec: audio.codec, sampleRate: sampleRate, numberOfChannels: channels, bitrate: 160000
-    }).then(function (res) {
-      return res && res.supported
-        ? { audio: audio, config: res.config, channels: channels, sampleRate: sampleRate }
-        : null;
-    }).catch(function () { return null; });
+    };
+    var wantsAac = audio.muxer === 'aac';
+    // Ask for the raw-AAC bitstream (WebCodecs' documented default) rather than
+    // ADTS: the muxer writes the AAC configuration into the track's `esds` and
+    // treats every sample as a raw frame, so ADTS frames would be muxed with
+    // their headers left in and play as noise or silence. Some builds that
+    // predate the `aac` extension reject it outright, so that config is tried
+    // first and the plain one is the fallback — losing audio entirely would be
+    // worse than a description we replace anyway (see onChunk).
+    var configs = wantsAac
+      ? [Object.assign({ aac: { format: 'aac' } }, base), base]
+      : [base];
+    return tryConfigs(configs).then(function (config) {
+      if (!config) return null;
+      // A recording and a stream both write the same `esds`, so the description
+      // is fixed here, from the same numbers the encoder is configured with,
+      // rather than trusted from the encoder's chunk metadata. An AAC encoder
+      // whose description is wrong or missing is what makes a file that looks
+      // right and plays silent.
+      return {
+        audio: audio,
+        config: config,
+        channels: channels,
+        sampleRate: sampleRate,
+        description: wantsAac ? buildAacAudioSpecificConfig(sampleRate, channels) : null
+      };
+    });
   });
   return Promise.all(attempts).then(function (results) {
     for (var i = 0; i < results.length; i += 1) { if (results[i]) return results[i]; }
@@ -2191,6 +2247,22 @@ function buildPipeline(run, audioMix) {
     var audio = audioChoice
       ? { codec: audioChoice.audio.muxer, numberOfChannels: audioChoice.channels, sampleRate: audioChoice.sampleRate }
       : undefined;
+    // The muxer writes the AAC AudioSpecificConfig into the track's `esds`.
+    // mp4-muxer seeds a correct guess at construction, but then overrides it
+    // with whatever the encoder puts in the chunk metadata — and an AAC encoder
+    // that omits or misreports that config yields an MP4 that looks right and
+    // plays silent. Hand it our own config, built from the same rate and
+    // channels the encoder is configured with, so the esds is right whatever
+    // the encoder says. Opus is left to its own description: its `dOps` box
+    // reads preskip and gain from it, which the muxer cannot reconstruct.
+    run.audioMeta = (audioChoice && audioChoice.description)
+      ? { decoderConfig: {
+            codec: 'mp4a.40.2',
+            sampleRate: audioChoice.sampleRate,
+            numberOfChannels: audioChoice.channels,
+            description: audioChoice.description
+          } }
+      : undefined;
 
     return openSink(run).then(function (ready) {
       if (!ready) return;
@@ -2356,7 +2428,9 @@ function onChunk(run, chunk, meta, isVideo) {
   run.written += chunk.byteLength || 0;
   try {
     if (isVideo) run.muxer.addVideoChunk(chunk, meta, rebased);
-    else run.muxer.addAudioChunk(chunk, meta, rebased);
+    // The audio description is ours for AAC (run.audioMeta) and the encoder's
+    // own for Opus, whose dOps box reads preskip and gain from it.
+    else run.muxer.addAudioChunk(chunk, run.audioMeta || meta, rebased);
   } catch (err) { /* finalize raced the last chunk */ }
 }
 

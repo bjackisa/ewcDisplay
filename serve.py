@@ -341,26 +341,51 @@ STREAM_LIVE = "live"
 STREAM_FAILED = "failed"
 
 
+_ffmpeg_cache = None
+
+
 def find_ffmpeg() -> str:
     """The ffmpeg to relay with, or '' when there is none.
 
-    A build with the RTMP protocol is required; some minimal static builds
-    advertise `rtmp` and then crash on it, so the check is only that the binary
-    exists and runs. EWC_FFMPEG overrides the search. A binary dropped beside
-    this file (or in `bin/`) is used too, so the project can carry its own."""
+    A build with the RTMP protocol is required. EWC_FFMPEG overrides the
+    search. Otherwise the candidates are checked in order — whatever is on the
+    PATH, then a binary beside this file, then one in `bin/` — and the first
+    that both runs and lists RTMP wins.
+
+    The run check is what makes this work on Windows. `bin/ffmpeg` there may be
+    a Linux binary left behind by an older get_ffmpeg.py, which Python cannot
+    execute at all; picking it made the relay report "no RTMP support" and
+    refuse every stream while the working `bin/ffmpeg.exe` sat beside it. A
+    candidate that runs but has no RTMP is still returned when nothing better
+    exists, so the report names the real problem rather than "no ffmpeg"."""
+    global _ffmpeg_cache
+    if _ffmpeg_cache is not None:
+        return _ffmpeg_cache
+
     override = os.environ.get("EWC_FFMPEG", "").strip()
     if override:
-        return override if os.path.exists(override) else ""
-    found = shutil.which("ffmpeg")
-    if found:
-        return found
-    # Beside this file, in case ffmpeg was dropped into the project.
+        _ffmpeg_cache = override if os.path.exists(override) else ""
+        return _ffmpeg_cache
+
     root = pathlib.Path(__file__).resolve().parent
-    for candidate in (root / "ffmpeg", root / "ffmpeg.exe",
-                      root / "bin" / "ffmpeg", root / "bin" / "ffmpeg.exe"):
-        if candidate.exists():
-            return str(candidate)
-    return ""
+    candidates = [
+        shutil.which("ffmpeg"),
+        str(root / "ffmpeg"), str(root / "ffmpeg.exe"),
+        str(root / "bin" / "ffmpeg"), str(root / "bin" / "ffmpeg.exe"),
+    ]
+    runnable = ""
+    for candidate in candidates:
+        if not candidate or not os.path.exists(candidate):
+            continue
+        if not ffmpeg_version(candidate):
+            continue  # exists, but will not run (wrong platform, not a binary)
+        if not runnable:
+            runnable = candidate
+        if ffmpeg_has_rtmp(candidate):
+            _ffmpeg_cache = candidate
+            return candidate
+    _ffmpeg_cache = runnable
+    return runnable
 
 
 def ffmpeg_version(path: str) -> str:

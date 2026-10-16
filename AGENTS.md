@@ -277,11 +277,12 @@ by default (`rtmp://a.rtmp.youtube.com/live2` plus the stream key, entered under
 `#stream-setup`). A browser cannot speak RTMP, so the console encodes the
 display into a fragmented MP4 and POSTs it to the project's own `/stream`
 endpoint; `serve.py` pipes that into ffmpeg, which relays it. Video is always
-`-c copy` — the console encoded it, so re-encoding would only cost quality.
-RTMP carries AAC, and the console sends AAC wherever the platform can encode it
-(`chooseAudioCodec` probes for an AAC encoder); where it cannot, WebCodecs
-offers only Opus, and the relay transcodes the audio alone to AAC. That is the
-difference between a stream with sound and one without.
+`-c copy` — the console encoded it, so re-encoding would only cost quality, and
+the stream is encoded at 1080p (see "The two sinks encode at different sizes"
+below). RTMP carries AAC, and the console sends AAC wherever the platform can
+encode it (`chooseAudioCodec` probes for an AAC encoder); where it cannot,
+WebCodecs offers only Opus, and the relay transcodes the audio alone to AAC.
+That is the difference between a stream with sound and one without.
 
 **One capture, two sinks.** A recording and a stream can run at once, and the
 console takes the screen only once (`startCapture`) — one screen picker, one
@@ -292,6 +293,20 @@ streamed are the same picture. This is why the capture object must carry
 reads `capture.ctx` and `new VideoFrame(capture.canvas)`; nesting the canvas
 under `capture.canvas.canvas` makes both throw silently and produces a 0-byte
 recording *and* a 0-byte stream.
+
+**The two sinks encode at different sizes.** The recording is 4K; the stream is
+1080p (`STREAM_TARGET`). Both encode the *same* canvas — the stream's encoder is
+told `scaledWidth`/`scaledHeight` on each `encode()` call, so it scales the
+shared frame down as it encodes and nothing is drawn twice. This is not a taste
+choice. Two concurrent **4K** encodes saturate a software encoder (there is no
+hardware 4K H.264 in the church's browser), the shared audio reader is starved,
+and the stream dies a visible death: the stream's `AudioEncoder` receives a
+fraction of the audio the pump reads, so the fragmented MP4 muxer's audio/video
+interleave stalls waiting for audio, no fragment is emitted, and the relay shows
+the stream frozen on its first frame while the recording carries on perfectly.
+The tell is `encodeQueueSize` staying at 0 and the audio pump's read rate
+collapsing to a third of real time. 1080p is half the width, a quarter of the
+pixels, and more than a projection screen needs; the relay still `-c copy`s it.
 
 **The static-ffmpeg DNS trap.** The vendored static ffmpeg links glibc's NSS
 statically, and in this container *any* hostname lookup — even `localhost` from
@@ -447,6 +462,21 @@ the Stop hide the moment the relay ends.
   Python and pass the address plus `-rtmp_tcurl` (and `-verifyhost` for rtmps).
   This is why `test_streaming.py` passed against `127.0.0.1` while a real
   YouTube push crashed: the test never exercised a name.
+- **The stream key goes on the *path*, before any query.** A YouTube backup URL
+  is `.../live2?backup=1`, and appending the key the naive way gives
+  `.../live2?backup=1/KEY`, which the ingest reads as a query value and rejects.
+  `composeRtmpUrl` splits off the query (and fragment), appends `/KEY` to the
+  path, and puts the query back: `.../live2/KEY?backup=1`.
+- **Two concurrent 4K encodes starve the shared audio reader and freeze the
+  stream.** With a recording and a stream both encoding the 4K canvas, the
+  software encoder saturates the CPU; the audio pump's read rate collapses to a
+  third of real time, each `AudioEncoder` receives less audio than the muxer
+  needs, and the fragmented MP4 muxer's interleave stalls with no fragment
+  emitted — the stream sits on its first frame while the recording is fine.
+  `encodeQueueSize` stays 0 (the encoder is not backed up; the *input* is
+  starved), which is the tell. The stream now encodes at 1080p via
+  `scaledWidth`/`scaledHeight` on each `encode()`, a quarter of the pixels and
+  ample for a projection screen; both sinks still encode the same shared canvas.
 - **Rebase the pause offset exactly once.** `onChunk` subtracts `pausedMicros`
   from the chunk timestamp, and the pumps hand the encoder the *raw* capture
   timestamp. Subtracting in the pump as well double-rebases any chunk the
@@ -496,6 +526,8 @@ python3 tests/test_ai_and_embeds.py     # AI, YouTube and the webpage panel
 python3 tests/test_recording_and_interactive.py  # recording + preview control
 python3 tests/test_streaming.py         # Go Live relay (against a local RTMP server)
 python3 tests/test_resource_use.py      # heap/CPU stay bounded
+python3 tests/test_real_record_stream.py   # record + stream the REAL display together
+python3 tests/test_real_stream_display.py  # stream the REAL display alone
 ```
 
 They cover: page errors, absence of controls on the display, launch vs preview
@@ -543,9 +575,24 @@ YouTube would be, and drives the console into it with nothing stubbed but the
 screen picker. It checks the transport (Go Live shows the time on air and a
 single icon-only Stop, never a Pause), the relay's states (idle → live →
 stopped), that a recording and a stream share one capture, and then inspects
-what the RTMP server actually received: an H.264 picture at **3840×2160**, AAC
+what the RTMP server actually received: an H.264 picture at **1920×1080**, AAC
 audio, and — via `volumedetect` — audio that is really audible, since a present
-but silent track was the failure this guards against.
+but silent track was the failure this guards against. The recording overlap runs
+longer than ten seconds and the received stream must last nearly the whole time
+on air, because the two-4K-encode starvation took about eight seconds to bite:
+a shorter overlap passed while the stream was already dead.
+
+`test_real_record_stream.py` and `test_real_stream_display.py` are the tests
+that use the **actual tool**, which the stubbed suites cannot: nothing about the
+screen is stubbed (a headed Chromium under Xvfb shares the real screen through
+the real picker and `display.html` is the real projection page), the operator
+steps Bible verses on air, and both the recorded MP4 and the relayed copy are
+inspected frame by frame. The stubbed suites prove the pipeline carries *some*
+picture; these prove the projection screen — the verse, the lyric, the
+countdown — reaches the relay and keeps moving, which is what "the stream is
+stuck on the first frame" was actually about. `test_real_record_stream.py` runs
+a recording and a stream together and checks both keep moving (the recording
+4K, the stream 1080p).
 
 `tests/test_live_youtube.py` is the manual end-to-end run against the real
 service, not part of the suite: given `EWC_TEST_RTMP_URL` and

@@ -263,16 +263,21 @@ def main():
             con.wait_for_timeout(6000)
 
             # ---------- recording alongside the stream shares one capture ----
+            # The recording runs long enough that a stream starved by the second
+            # 4K encode would visibly stop: the old bug froze the stream about 8
+            # seconds in, so the overlap has to outlast that.
+            on_air_start = time.time()
             con.click("#record-btn")
-            con.wait_for_timeout(2500)
+            con.wait_for_timeout(10500)
             rec_active = con.evaluate("!document.getElementById('rec-stop-btn').hidden")
             check("a recording runs at the same time as the stream", rec_active)
             check("the stream stays live while recording",
                   stream_status(base).get("state") == "live")
             con.click("#rec-stop-btn")
-            con.wait_for_timeout(4000)
+            con.wait_for_timeout(3000)
 
             # ---------- Stop the stream ----------
+            on_air_seconds = time.time() - on_air_start + 6.0
             con.click("#live-stop-btn")
             con.wait_for_timeout(1500)
             check("the stream Stop returns the button to rest",
@@ -302,10 +307,16 @@ def main():
             check("the RTMP server received an audio stream", info["has_audio"])
             check("the relayed stream carries several seconds of content",
                   info["seconds"] >= 3, f"{info['seconds']:.1f}s")
-            # The picture is delivered at 4K, and it is never re-encoded: the
-            # relay copies the console's own H.264.
-            check("the relayed picture is 4K",
-                  (info["width"], info["height"]) == (3840, 2160),
+            # A stream starved by a concurrent 4K encode froze partway through,
+            # so the received stream must run for nearly the whole time on air —
+            # not merely start.
+            check("the relayed stream ran for the whole time on air",
+                  info["seconds"] >= on_air_seconds - 4,
+                  f"{info['seconds']:.1f}s of {on_air_seconds:.1f}s on air")
+            # The picture is delivered at the stream's own size, 1080p, and it
+            # is never re-encoded: the relay copies the console's own H.264.
+            check("the relayed picture is 1080p",
+                  (info["width"], info["height"]) == (1920, 1080),
                   f"{info['width']}x{info['height']}")
             # RTMP carries AAC, whatever the console had to encode with.
             check("the relayed audio is AAC", info["audio_codec"] == "aac",

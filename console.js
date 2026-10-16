@@ -1749,6 +1749,14 @@ var REC_MIN_STEP_MICROS = Math.floor(1000000 / REC_FRAME_RATE);
    uplink shows as a stutter to every viewer. */
 var STREAM_VIDEO_BPS = 12000000;
 var STREAM_AUDIO_BPS = 160000;
+/* The stream is encoded at 1080p, not the recording's 4K. Both sinks encode
+   the same canvas, and two concurrent 4K encodes saturate a software encoder:
+   the shared audio reader is starved, the fragmented muxer's audio/video
+   interleave stalls waiting for audio, and the stream freezes on the first
+   frame while the recording carries on. 1080p is a quarter of the pixels and
+   is more than a projection screen needs; the relay copies the picture
+   unchanged. */
+var STREAM_TARGET = [1920, 1080];
 var STREAM_STATUS_PATH = '/stream/status';
 var STREAM_STOP_PATH = '/stream/stop';
 var STREAM_PROBE_PATH = '/stream/probe';
@@ -2160,10 +2168,17 @@ function muxerTargetFor(run, audio) {
 }
 
 function buildPipeline(run, audioMix) {
+  // The recording is 4K; the stream is 1080p (see STREAM_TARGET). Both encode
+  // the same 4K canvas — the stream's encoder scales it down as it encodes, so
+  // the picture is still the record's picture, at half the width and a quarter
+  // of the pixels.
+  var target = run.sink === 'stream' ? STREAM_TARGET : REC_TARGET_SIZES[0];
+  run.outWidth = target[0];
+  run.outHeight = target[1];
   var video = {
     codec: 'avc',
-    width: REC_TARGET_SIZES[0][0],
-    height: REC_TARGET_SIZES[0][1],
+    width: target[0],
+    height: target[1],
     frameRate: REC_FRAME_RATE
   };
   var videoBps = run.sink === 'stream' ? STREAM_VIDEO_BPS : REC_VIDEO_BPS;
@@ -2482,7 +2497,16 @@ function pumpCapture(capture) {
         run.forceKeyFrame = false;
         try {
           var out = new VideoFrame(capture.canvas, { timestamp: rawTimestamp });
-          run.videoEncoder.encode(out, { keyFrame: keyFrame });
+          var opts = { keyFrame: keyFrame };
+          // The stream encodes a smaller picture than the canvas holds, so the
+          // encoder is told to scale; the frame is shared, so nothing is drawn
+          // twice.
+          if (run.outWidth && (run.outWidth !== capture.canvas.width ||
+              run.outHeight !== capture.canvas.height)) {
+            opts.scaledWidth = run.outWidth;
+            opts.scaledHeight = run.outHeight;
+          }
+          run.videoEncoder.encode(out, opts);
           out.close();
         } catch (err) { /* encoder closed */ }
       });
@@ -2589,7 +2613,13 @@ function holdLastFrame(run) {
           timestamp: run.lastVideoTs + run.pausedMicros + (run.lastVideoDuration || 33333),
           duration: Math.round(holdMs * 1000)
         });
-        run.videoEncoder.encode(out, { keyFrame: false });
+        var opts = { keyFrame: false };
+        if (run.outWidth && (run.outWidth !== run.compositor.canvas.width ||
+            run.outHeight !== run.compositor.canvas.height)) {
+          opts.scaledWidth = run.outWidth;
+          opts.scaledHeight = run.outHeight;
+        }
+        run.videoEncoder.encode(out, opts);
         out.close();
       } catch (err) { /* encoder closed */ }
       resolve();
@@ -2797,13 +2827,23 @@ function stopRecording() {
    ====================================================================== */
 
 /** The RTMP URL, with the key appended. YouTube's ingest is
- *  `<url>/<key>`, and a backup URL carries its own query string, so the key
- *  goes on the end of whichever base the operator chose. */
+ *  `<url>/<key>`, but a backup URL (`.../live2?backup=1`) carries its own
+ *  query string, and the key must go on the *path* — appending it after the
+ *  query would make `?backup=1/key`, which the ingest treats as a query value
+ *  and rejects. So the key is appended to the path and any query is preserved
+ *  at the end. */
 function composeRtmpUrl(base, key) {
   base = (base || '').trim().replace(/\/+$/, '');
   key = (key || '').trim();
   if (!base) return '';
-  return key ? base + '/' + key : base;
+  if (!key) return base;
+  var hash = '';
+  var hashAt = base.indexOf('#');
+  if (hashAt >= 0) { hash = base.slice(hashAt); base = base.slice(0, hashAt); }
+  var query = '';
+  var queryAt = base.indexOf('?');
+  if (queryAt >= 0) { query = base.slice(queryAt); base = base.slice(0, queryAt); }
+  return base + '/' + key + query + hash;
 }
 
 function loadStreamSettings() {

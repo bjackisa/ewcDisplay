@@ -500,6 +500,100 @@ def main():
                 check("system audio and the microphone are summed into one track",
                       mean_db is not None and mean_db > -60, f"{mean_db} dB mean")
 
+            # ---- Windows: getSettings() disagrees with the real frames ----
+            # A microphone reports the format its constraints *asked* for, and
+            # the spec allows that to differ from what is delivered. On Windows
+            # a mono mic hands over stereo samples once the echo-cancellation
+            # path has had them, so an encoder configured from getSettings()
+            # (one channel) rejects every frame with "Input audio buffer is
+            # incompatible with codec parameters": the file keeps a track and
+            # plays as silence. The encoder must be configured from the frames
+            # that really arrive.
+            con.evaluate("""() => {
+              // A real video track: a canvas captureStream is a headless
+              // artifact the video encoder cannot take.
+              navigator.mediaDevices.getUserMedia({ video: true }).then((cam) => {
+                navigator.mediaDevices.getDisplayMedia = async () => cam;
+              });
+            }""")
+            con.wait_for_timeout(500)
+            con.evaluate("""() => {
+              // Keep the real microphone for the sections that follow.
+              window.__origGUM = navigator.mediaDevices.getUserMedia.bind(
+                navigator.mediaDevices);
+              const actx = new AudioContext({ sampleRate: 48000 });
+              actx.resume();
+              const dest = actx.createMediaStreamDestination();
+              const osc = actx.createOscillator();
+              osc.frequency.value = 440;
+              const g = actx.createGain(); g.gain.value = 0.4;
+              osc.connect(g); g.connect(dest); osc.start();
+              const real = dest.stream.getAudioTracks()[0];
+              // The lie: the track claims mono at 44.1k while its frames are
+              // 48k stereo, exactly as a Windows microphone does.
+              real.getSettings = () => ({ channelCount: 1, sampleRate: 44100 });
+              const stream = new MediaStream([real]);
+              navigator.mediaDevices.getUserMedia = async () => stream;
+            }""")
+            con.evaluate("""async () => {
+              const root = await navigator.storage.getDirectory();
+              for await (const [name] of root.entries()) {
+                await root.removeEntry(name, { recursive: true });
+              }
+            }""")
+            con.click("#record-btn")
+            con.wait_for_timeout(7000)
+            con.click("#rec-stop-btn")
+            con.wait_for_timeout(6000)
+
+            ffmpeg_bin = find_ffmpeg()
+            if ffmpeg_bin:
+                mp4_bytes = con.evaluate("""async () => {
+                  const root = await navigator.storage.getDirectory();
+                  async function mp4(dir){
+                    for await (const [name, h] of dir.entries()){
+                      if (h.kind === 'directory'){ const r = await mp4(h); if (r) return r; }
+                      else if (name.endsWith('.mp4')) return await h.getFile();
+                    }
+                    return null;
+                  }
+                  const f = await mp4(root);
+                  const buf = new Uint8Array(await f.arrayBuffer());
+                  let s = '';
+                  for (let i = 0; i < buf.length; i++) s += String.fromCharCode(buf[i]);
+                  return btoa(s);
+                }""")
+                import base64, tempfile
+                with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+                    tmp.write(base64.b64decode(mp4_bytes))
+                    tmp_path = tmp.name
+                probe = subprocess.run(
+                    [ffmpeg_bin, "-hide_banner", "-i", tmp_path],
+                    capture_output=True, text=True).stderr
+                level = subprocess.run(
+                    [ffmpeg_bin, "-hide_banner", "-i", tmp_path, "-af", "volumedetect",
+                     "-f", "null", "-"], capture_output=True, text=True).stderr
+                pathlib.Path(tmp_path).unlink(missing_ok=True)
+                # The encoder must have been configured from the measured
+                # format, not the reported one: 48k stereo, never 44.1k mono.
+                check("a track whose settings lie still records its real format",
+                      "48000 Hz, stereo" in probe,
+                      next((l.strip() for l in probe.splitlines()
+                            if "Audio:" in l), "no audio stream"))
+                m = re.search(r"mean_volume:\s*(-?\d+(?:\.\d+)?) dB", level)
+                mean_db = float(m.group(1)) if m else None
+                check("a track whose settings lie is still audible, not silent",
+                      mean_db is not None and mean_db > -60, f"{mean_db} dB mean")
+            else:
+                print("SKIP  ffmpeg not installed — audio format not measured")
+
+            # Put the real microphone back: the next section needs one.
+            con.evaluate("""() => {
+              if (window.__origGUM) {
+                navigator.mediaDevices.getUserMedia = window.__origGUM;
+              }
+            }""")
+
             # ---- the real-world case: no system audio, suspended context ----
             # A machine sharing a screen over HDMI usually has no system-audio
             # track at all, so the microphone is the only source — and Chrome

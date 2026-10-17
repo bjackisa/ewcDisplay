@@ -202,11 +202,29 @@ Two traps make a file that carries an audio track and still plays as silence.
 Both bite the real-world case — a screen shared over HDMI, where the share
 carries no system audio and the microphone is the only source:
 
-- **A single source must skip the graph.** With only the microphone (or only the
-  screen) present, its own `MediaStreamTrack` goes straight to the encoder
-  (`bareAudio`). Routing a lone track through a `MediaStreamDestination` is a
-  needless dependency on an `AudioContext` — and a *suspended* context's
-  destination emits nothing at all: no samples, no error, silence.
+- **The encoder must be configured from the frames, not from
+  `track.getSettings()`.** A track reports the format its constraints *asked*
+  for, and the spec allows that to differ from what is delivered; on Windows a
+  mono microphone hands over stereo samples once the echo-cancellation path has
+  had them. Configuring the encoder from the reported format makes it reject
+  every frame with "Input audio buffer is incompatible with codec parameters",
+  and because `pumpCaptureAudio` swallows the throw the file keeps a track and
+  plays as silence — the "microphone is in use but there is no audio" report.
+  The fix has two halves: both sources go through the Web Audio graph, which
+  resamples to the context's own rate and channel count so the mix's settings
+  and its samples always agree; and `probeAudioFormat` measures the real format
+  from one frame (before the capture's own reader opens, so no frame is lost)
+  for the bare-track fallback, where there is no graph to normalise through.
+  `chooseAudioCodec` prefers that measurement over `getSettings()`, and a
+  failed `AudioEncoder` now says so through `#toast-stack` rather than only
+  flipping `hasAudio`.
+- **A lone track must skip the graph *only when there is no running context*.**
+  The graph needs an `AudioContext`, and a *suspended* context's destination
+  emits nothing at all: no samples, no error, silence. So the one-source case
+  is still handed over untouched (`bareAudio`) — but only as the fallback when
+  `primeAudioContext()` did not produce a running context. When the context is
+  running, even a single source goes through the graph, because that is what
+  makes the encoder's configuration match the samples.
 - **The graph's `AudioContext` must be created under a gesture.**
   `buildAudioMix` runs after `showDirectoryPicker` and `getDisplayMedia` have
   awaited, so by then there is no live user gesture and Chrome's autoplay policy
@@ -592,7 +610,12 @@ and that an audio track is present and loads. Where `ffmpeg` is on the PATH — 
 in `bin/` — it goes one step further and measures the track's real level with
 `volumedetect`, because a track that exists is not the same as sound: the
 shipped bug was a silent file, the audio pump never having ended so the mixed
-track was never finalized.
+track was never finalized. It also reproduces the Windows silence directly: a
+microphone track whose `getSettings()` claims mono/44.1k while its frames are
+stereo/48k must still be recorded at its real format and be audible, because
+configuring the encoder from the reported format makes it reject every frame.
+That is the "microphone is in use but there is no audio" report, and it is
+invisible on Linux CI, where every track tells the truth.
 
 `test_streaming.py` stands a real RTMP server in ffmpeg's `-listen 1` mode where
 YouTube would be, and drives the console into it with nothing stubbed but the

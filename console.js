@@ -1932,6 +1932,42 @@ function buildAacAudioSpecificConfig(sampleRate, channels) {
   return out;
 }
 
+/** The audio track's *measured* format, not the target its constraints asked
+ *  for. `getSettings()` reports what was requested, and the spec allows it to
+ *  differ from what is delivered; on Windows a mono microphone routinely hands
+ *  over stereo samples once the echo-cancellation path has had them, and an
+ *  encoder configured for one channel then rejects every frame — a track that
+ *  is present and silent. One frame is read and the reader cancelled, which
+ *  does not disturb a reader opened afterwards. Resolves null when the format
+ *  cannot be measured, so the settings are used as before. */
+function probeAudioFormat(track) {
+  if (!track || typeof MediaStreamTrackProcessor !== 'function') {
+    return Promise.resolve(null);
+  }
+  var reader;
+  try {
+    reader = new MediaStreamTrackProcessor({ track: track }).readable.getReader();
+  } catch (err) { return Promise.resolve(null); }
+  return new Promise(function (resolve) {
+    var settled = false;
+    function finish(format) {
+      if (settled) return;
+      settled = true;
+      try { reader.cancel(); } catch (e) {}
+      resolve(format);
+    }
+    // A track that never delivers a frame must not hold the recording up.
+    setTimeout(function () { finish(null); }, 1500);
+    reader.read().then(function (res) {
+      if (res.done) { finish(null); return; }
+      var frame = res.value;
+      var format = { sampleRate: frame.sampleRate, channelCount: frame.numberOfChannels };
+      frame.close();
+      finish(format);
+    }).catch(function () { finish(null); });
+  });
+}
+
 /** The audio encoder + muxer codec pair, taken from the mixed track so the
  *  channel count and rate always match what will be fed in. Never rejects:
  *  losing the audio must not lose the video.
@@ -1941,14 +1977,28 @@ function buildAacAudioSpecificConfig(sampleRate, channels) {
  *  AAC the console sends it and the relay copies it; where it cannot, the
  *  console sends Opus and the relay transcodes that track to AAC. FLV itself
  *  has no Opus, so it is always AAC that leaves the server. */
-function chooseAudioCodec(track, sink, hint) {
+function chooseAudioCodec(track, sink, hint, measured) {
   if (typeof window.AudioEncoder === 'undefined' ||
       typeof window.AudioEncoder.isConfigSupported !== 'function') {
     return Promise.resolve(null);
   }
   var settings = (track && track.getSettings) ? track.getSettings() : {};
-  var channels = settings.channelCount || 2;
-  var sampleRate = settings.sampleRate || 48000;
+  // Prefer the format the frames really carry over the one the track claims:
+  // configuring the encoder for the claimed format is what makes it reject
+  // every frame when the two disagree. The capture measures this once, before
+  // its own reader takes over, and passes it here; a caller with no
+  // measurement gets one taken now.
+  var resolveFormat = measured
+    ? Promise.resolve(measured)
+    : probeAudioFormat(track);
+  return resolveFormat.then(function (real) {
+    var channels = (real && real.channelCount) || settings.channelCount || 2;
+    var sampleRate = (real && real.sampleRate) || settings.sampleRate || 48000;
+    return pickAudioCodec(sink, hint, channels, sampleRate);
+  });
+}
+
+function pickAudioCodec(sink, hint, channels, sampleRate) {
   var candidates;
   if (sink === 'stream') {
     // The relay's plan was fixed when the socket opened, so this must match the
@@ -2007,19 +2057,26 @@ function chooseAudioCodec(track, sink, hint) {
    but plays as silence — which is exactly how a recording with no sound gets
    made even though the microphone was granted.
 
-   1. A single source needs no mixer at all. When only the microphone (or only
-      the screen) is present, its own MediaStreamTrack goes straight to the
-      encoder. Routing it through a Web Audio graph would be a needless
-      dependency on an AudioContext that Chrome may hold suspended, and a
-      suspended context's MediaStreamDestination emits nothing at all: no
-      samples, no error, silence.
+   1. A single source must still go through the graph. It is tempting to hand a
+      lone track straight to the encoder, but the encoder is configured from
+      `track.getSettings()`, and that is only the *target* the constraints asked
+      for — the spec says it "may differ from measured performance". On Windows
+      a mono microphone routinely delivers stereo samples once the
+      echo-cancellation path has had them, so an encoder configured for one
+      channel rejects every frame with "Input audio buffer is incompatible with
+      codec parameters". The graph resamples both sources to the context's own
+      rate and channel count, so the mix's settings and its samples always
+      agree. (probeAudioFormat measures the real format as a second guard, for
+      the fallback below.)
 
-   2. When there really are two sources, the context must actually be running.
-      It is created after the folder and screen pickers have awaited, so there
-      is no live user gesture by then and Chrome's autoplay policy can leave it
-      'suspended'. resume() cannot revive it without a gesture, so the graph is
-      built inside the click handler instead (primeAudioContext) and adopted
-      here; if even that failed, the graph is abandoned rather than trusted. */
+   2. When the context is not running the graph would emit silence, so the
+      fallback is a single bare track — and *that* is the case the probe
+      covers. The context is created after the folder and screen pickers have
+      awaited, so there is no live user gesture by then and Chrome's autoplay
+      policy can leave it 'suspended'. resume() cannot revive it without a
+      gesture, so the graph is built inside the click handler instead
+      (primeAudioContext) and adopted here; if even that failed, the graph is
+      abandoned rather than trusted. */
 
 function buildAudioMix(stream, primedContext) {
   var screenTrack = stream.getAudioTracks()[0] || null;
@@ -2028,26 +2085,27 @@ function buildAudioMix(stream, primedContext) {
   return requestMic().then(function (mic) {
     var micTrack = mic && mic.stream ? mic.stream.getAudioTracks()[0] : null;
 
-    // One source: hand it over untouched. No graph, no context, no silence.
-    if (micTrack && !screenTrack) return bareAudio(mic, micTrack);
-    if (screenTrack && !micTrack) return bareAudio(null, screenTrack);
-
     // No source at all.
     if (!micTrack && !screenTrack) {
       if (mic) stopStream(mic.stream);
       return null;
     }
 
-    // Two sources: they must be summed, which does need the graph. A fresh
-    // destination each run, so one run stopping its track cannot disarm the
-    // shared context for the next.
+    // No running context to normalise through. Hand the best single source
+    // over untouched rather than write a mute track; probeAudioFormat corrects
+    // the encoder's configuration from the frames that actually arrive.
     if (!context) {
-      // The context never came up. A silent file is worse than no track, so
-      // keep the screen's own audio and say nothing about the microphone.
-      if (mic) stopStream(mic.stream);
-      return bareAudio(null, screenTrack);
+      if (screenTrack) {
+        if (mic) stopStream(mic.stream);
+        return bareAudio(null, screenTrack);
+      }
+      return bareAudio(mic, micTrack);
     }
 
+    // One or two sources: the graph is what makes the encoder's configuration
+    // and the samples agree, so both go through it. A fresh destination each
+    // run, so one run stopping its track cannot disarm the shared context for
+    // the next.
     var destination = context.createMediaStreamDestination();
     var sources = [];
     addSource(context, destination, screenTrack, 1, sources);
@@ -2057,8 +2115,11 @@ function buildAudioMix(stream, primedContext) {
         // Still suspended: the graph would emit silence. Fall back to one
         // source rather than write a mute track.
         sources.forEach(function (s) { try { s.source.disconnect(); } catch (e) {} });
-        if (mic) stopStream(mic.stream);
-        return bareAudio(null, screenTrack);
+        if (screenTrack) {
+          if (mic) stopStream(mic.stream);
+          return bareAudio(null, screenTrack);
+        }
+        return bareAudio(mic, micTrack);
       }
       return {
         context: context,
@@ -2240,7 +2301,8 @@ function buildPipeline(run, audioMix) {
   var videoBps = run.sink === 'stream' ? STREAM_VIDEO_BPS : REC_VIDEO_BPS;
   var audioTrack = (audioMix && audioMix.hasAny) ? audioMix.stream.getAudioTracks()[0] : null;
 
-  return chooseAudioCodec(audioTrack, run.sink, run.audioHint).then(function (audioChoice) {
+  return chooseAudioCodec(audioTrack, run.sink, run.audioHint,
+                          audioMix && audioMix.measuredFormat).then(function (audioChoice) {
     if (run !== rec && run !== air) return;
     if (!audioChoice || !audioTrack) audioChoice = null;
 
@@ -2303,8 +2365,17 @@ function buildPipeline(run, audioMix) {
       if (audio) {
         run.audioEncoder = new AudioEncoder({
           output: function (chunk, meta) { onChunk(run, chunk, meta, false); },
-          // An audio glitch must never take the video down with it.
-          error: function () { run.hasAudio = false; }
+          // An audio glitch must never take the video down with it — but the
+          // operator must not be handed a silent file with no idea why, so the
+          // first failure is reported once through the toast the recording
+          // already reports itself with.
+          error: function (e) {
+            run.hasAudio = false;
+            if (!run.audioWarned) {
+              run.audioWarned = true;
+              toast('Audio stopped: ' + ((e && e.message) || 'the encoder failed'), true);
+            }
+          }
         });
         run.audioEncoder.configure(audioChoice.config);
         run.hasAudio = true;
@@ -2503,21 +2574,28 @@ function ensureCapture(primed) {
     // picture recorded and the picture streamed are the same picture.
     Object.assign(pending, createCaptureCanvas(settings.width || 1920, settings.height || 1080));
     pending.audioTrack = (mix && mix.hasAny) ? mix.stream.getAudioTracks()[0] : null;
-    // One reader for the whole capture. A reader cannot be shared, so the
-    // frames are read here and drawn onto the canvas once; each sink then
-    // encodes that same canvas.
-    var vproc = new MediaStreamTrackProcessor({ track: pending.videoTrack });
-    pending.videoProc = vproc;
-    pending.videoReader = vproc.readable.getReader();
-    pending.videoDone = pumpCapture(pending);
-    if (pending.audioTrack) {
-      var aproc = new MediaStreamTrackProcessor({ track: pending.audioTrack });
-      pending.audioProc = aproc;
-      pending.audioReader = aproc.readable.getReader();
-      pending.audioDone = pumpCaptureAudio(pending);
-    }
-    pending.ready = true;
-    return pending;
+    // Measure the track's real format *before* the pump takes its reader: the
+    // probe consumes a frame, and the pump must not lose one. The measurement
+    // is what the encoder is configured from, because getSettings() reports the
+    // target the constraints asked for and may differ from what is delivered.
+    return probeAudioFormat(pending.audioTrack).then(function (format) {
+      if (mix) mix.measuredFormat = format;
+      // One reader for the whole capture. A reader cannot be shared, so the
+      // frames are read here and drawn onto the canvas once; each sink then
+      // encodes that same canvas.
+      var vproc = new MediaStreamTrackProcessor({ track: pending.videoTrack });
+      pending.videoProc = vproc;
+      pending.videoReader = vproc.readable.getReader();
+      pending.videoDone = pumpCapture(pending);
+      if (pending.audioTrack) {
+        var aproc = new MediaStreamTrackProcessor({ track: pending.audioTrack });
+        pending.audioProc = aproc;
+        pending.audioReader = aproc.readable.getReader();
+        pending.audioDone = pumpCaptureAudio(pending);
+      }
+      pending.ready = true;
+      return pending;
+    });
   }).catch(function (err) {
     // A refused screen share, or a capture that could not start: tell every
     // sink that is waiting, then let go.

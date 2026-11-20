@@ -216,11 +216,20 @@ requirement is a Chromium-based desktop browser ŌĆö the File System Access AP
 says so rather than half-working.
 
 Every frame is composited onto a 3840×2160 canvas before encoding, so the file
-is 4K whatever the operator's monitor is. Audio is a *mix*, not just the screen's
-own sound: `buildAudioMix` sums the captured audio with the microphone
-(`getUserMedia`, gained up) through one Web Audio graph, so the room's sound and
-the preacher's voice are both in the file and losing either one does not lose the
-recording.
+is 4K whatever the operator's monitor is — *if the machine can encode it*.
+`chooseVideoConfig` asks `VideoEncoder.isConfigSupported` before anything is
+built, walking a ladder of sizes (`REC_TARGET_SIZES`: 4K, 1440p, 1080p) against
+a ladder of profiles (`REC_CODEC_LADDER`: High, Main, Baseline). The first pair
+the machine really supports wins and a fallback is announced through a toast.
+This is not a nicety: a config the encoder accepts but cannot run rejects every
+frame, the video track reaches `finalize()` with no sample and therefore no
+decoder config, and mp4-muxer then throws the meaningless *"Cannot read
+properties of null (reading 'colorSpace')"* — the file left behind has sound and
+no picture. Asking first is the only way to know; `configure()` alone does not
+fail politely. Audio is a *mix*, not just the screen's own sound: `buildAudioMix`
+sums the captured audio with the microphone (`getUserMedia`, gained up) through
+one Web Audio graph, so the room's sound and the preacher's voice are both in
+the file and losing either one does not lose the recording.
 
 **Which input, and how it is opened.** The audio input is a choice, because a
 phone running DroidCam and a mixing desk on the line-in jack are both just
@@ -616,6 +625,17 @@ sustained outage (45s) or exhausted reconnect attempts ends the stream.
   `REC_FRAME_PERIOD_MICROS` (`floor(1e6 / REC_FRAME_RATE)`) when the chunk has
   none. The suite measures real frame luminance with `signalstats` for this
   reason: an audio track that exists is not a picture.
+- **An encoder that accepts a config it cannot run produces the null
+  `colorSpace` error at Stop.** `configure()` does not validate the profile or
+  the size; a machine with no 4K H.264 accepts `avc1.640033` at 3840×2160 and
+  then rejects every frame. `onChunk`'s throw was swallowed, so the video track
+  had no sample, and `finalize()` died on
+  `Cannot read properties of null (reading 'colorSpace')` — mp4-muxer reading
+  the decoder config of a track that never received one. `chooseVideoConfig`
+  asks `isConfigSupported` first and steps down size and profile; `finishSink`
+  refuses to finalize a track with no sample and reports the real reason; and
+  `warnIfNoPicture` says so four seconds in, while the service can still be
+  rescued. Never trust `configure()` to tell you a codec works.
 - **Frames closer together than one frame period must be dropped.** The muxer
   times the video track in units of `REC_FRAME_RATE` (`57600` for 30fps), so two
   frames inside one unit get the same decode timestamp and the file is invalid.

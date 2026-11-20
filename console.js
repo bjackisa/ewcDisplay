@@ -1954,6 +1954,12 @@ if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
 /* The delivery size, then standard steps down, then whatever the screen offers.
    A build with no 4K encoder records the best size it does have. */
 var REC_TARGET_SIZES = [[3840, 2160], [2560, 1440], [1920, 1080]];
+/* The H.264 profiles a browser may offer, best first. A desktop GPU usually
+   exposes High profile at 4K, a machine with only a software encoder often
+   stops at Main, and an older one at 1080p. Tried in order with each size, so a
+   machine that cannot encode 4K High still records the best picture it has
+   instead of writing a file with sound and no frames. */
+var REC_CODEC_LADDER = ['avc1.640033', 'avc1.4D0033', 'avc1.42E033'];
 var REC_FRAME_RATE = 30;
 var REC_VIDEO_BPS = 26000000;
 var REC_AUDIO_BPS = 192000;
@@ -2106,8 +2112,20 @@ function startRecTicker() {
   rec.tick = setInterval(function () {
     if (!rec) return;
     refreshRecordLabel();
-    if (rec.state === 'recording') refreshFreeSpace();
+    if (rec.state === 'recording') { refreshFreeSpace(); warnIfNoPicture(rec); }
   }, 1000);
+}
+
+/** A recording that has been running a few seconds with sound but not one
+ *  encoded frame is the "black screen with audio" file, and finding that out at
+ *  Stop is too late — the service is over. Say it while it can still be fixed. */
+function warnIfNoPicture(run) {
+  if (run.videoSamples || run.noPictureWarned) return;
+  if (performance.now() - (run.startedAtMs || 0) < 4000) return;
+  run.noPictureWarned = true;
+  toast(run.encodeError
+    ? 'No picture is being recorded: ' + ((run.encodeError && run.encodeError.message) || run.encodeError)
+    : 'No picture is being recorded. Stop and start again, and share the display window or the whole screen.', true);
 }
 
 function stopRecTicker() {
@@ -2519,6 +2537,7 @@ function createCaptureCanvas(captureWidth, captureHeight) {
 function markRecordingStarted(run) {
   run.state = 'recording';
   run.started = true;
+  run.startedAtMs = performance.now();
   setRecordButton('recording');
   startRecTicker();
   refreshRecordLabel();
@@ -2551,27 +2570,90 @@ function muxerTargetFor(run, audio) {
   };
 }
 
+/** The first picture configuration this machine can actually encode, biggest
+ *  and best first. `VideoEncoder.configure()` does not fail politely: an
+ *  unsupported profile or size either throws (the sink dies at once) or is
+ *  accepted and then rejects every frame, which is the "audio and a black
+ *  screen" file. Asking `isConfigSupported` first is the only way to know. */
+function chooseVideoConfig(sizes, bps) {
+  var candidates = [];
+  sizes.forEach(function (size) {
+    REC_CODEC_LADDER.forEach(function (codec) {
+      candidates.push({ codec: codec, width: size[0], height: size[1] });
+    });
+  });
+  function build(c) {
+    return {
+      codec: c.codec,
+      width: c.width,
+      height: c.height,
+      bitrate: bps,
+      framerate: REC_FRAME_RATE,
+      // 'realtime' keeps the encoder to a decode order that matches
+      // presentation order: no B-frames, so every chunk's timestamp moves
+      // forward and a frame dropped at the input leaves no hole in the
+      // reference chain. 'quality' would reorder for a little more
+      // compression, which is exactly what a screen capture cannot afford.
+      latencyMode: 'realtime'
+    };
+  }
+  function result(c) {
+    return {
+      config: build(c),
+      width: c.width,
+      height: c.height,
+      fellBack: c.width !== candidates[0].width || c.codec !== candidates[0].codec
+    };
+  }
+  if (typeof window.VideoEncoder.isConfigSupported !== 'function') {
+    return Promise.resolve(result(candidates[0]));
+  }
+  var i = 0;
+  function next() {
+    if (i >= candidates.length) return Promise.resolve(null);
+    var c = candidates[i++];
+    return VideoEncoder.isConfigSupported(build(c)).then(function (res) {
+      return (res && res.supported) ? result(c) : next();
+    }).catch(function () { return next(); });
+  }
+  return next();
+}
+
 function buildPipeline(run, audioMix) {
-  // The recording is 4K; the stream is 1080p (see STREAM_TARGET). Both encode
-  // the same 4K canvas — the stream's encoder scales it down as it encodes, so
-  // the picture is still the record's picture, at half the width and a quarter
-  // of the pixels.
-  var target = run.sink === 'stream' ? STREAM_TARGET : REC_TARGET_SIZES[0];
-  run.outWidth = target[0];
-  run.outHeight = target[1];
-  var video = {
-    codec: 'avc',
-    width: target[0],
-    height: target[1],
-    frameRate: REC_FRAME_RATE
-  };
+  // The recording wants 4K and the stream 1080p (see STREAM_TARGET), but the
+  // machine has the final say: a build with no 4K encoder would accept the
+  // config and then reject every frame, which is a file with sound and no
+  // picture. chooseVideoConfig asks what is really supported and steps down the
+  // size and profile ladder until something is. Both sinks still encode the one
+  // shared canvas — the stream's encoder is told to scale it as it encodes, so
+  // the picture recorded and the picture streamed are the same picture.
   var videoBps = run.sink === 'stream'
     ? STREAM_BITRATE_STEPS[0]
     : REC_VIDEO_BPS;
   var audioTrack = (audioMix && audioMix.hasAny) ? audioMix.stream.getAudioTracks()[0] : null;
 
-  return chooseAudioCodec(audioTrack, run.sink, run.audioHint,
-                          audioMix && audioMix.measuredFormat).then(function (audioChoice) {
+  return Promise.all([
+    chooseVideoConfig(run.sink === 'stream' ? [STREAM_TARGET] : REC_TARGET_SIZES, videoBps),
+    chooseAudioCodec(audioTrack, run.sink, run.audioHint,
+                     audioMix && audioMix.measuredFormat)
+  ]).then(function (choices) {
+    var videoChoice = choices[0];
+    var audioChoice = choices[1];
+    if (!videoChoice) {
+      throw new Error('This browser has no H.264 encoder this machine can run, so the picture cannot be recorded.');
+    }
+    if (videoChoice.fellBack) {
+      toast('Recording at ' + videoChoice.width + '×' + videoChoice.height +
+        ' — this machine cannot encode the full 4K picture.', true);
+    }
+    var video = {
+      codec: 'avc',
+      width: videoChoice.width,
+      height: videoChoice.height,
+      frameRate: REC_FRAME_RATE
+    };
+    run.outWidth = videoChoice.width;
+    run.outHeight = videoChoice.height;
     if (run !== rec && run !== air) return;
     if (!audioChoice || !audioTrack) audioChoice = null;
 
@@ -2620,20 +2702,16 @@ function buildPipeline(run, audioMix) {
       // The stream's bitrate is the ladder's top step and is re-configured at
       // run time as the uplink changes; the recording's is fixed.
       run.videoBps = videoBps;
-      run.videoConfig = {
-        codec: 'avc1.640033',
-        width: video.width,
-        height: video.height,
-        bitrate: videoBps,
-        framerate: REC_FRAME_RATE,
-        // 'realtime' keeps the encoder to a decode order that matches
-        // presentation order: no B-frames, so every chunk's timestamp moves
-        // forward and a frame dropped at the input leaves no hole in the
-        // reference chain. 'quality' would reorder for a little more
-        // compression, which is exactly what a screen capture cannot afford.
-        latencyMode: 'realtime'
-      };
-      run.videoEncoder.configure(run.videoConfig);
+      run.videoConfig = videoChoice.config;
+      try {
+        run.videoEncoder.configure(run.videoConfig);
+      } catch (err) {
+        // The config was checked a moment ago, so this is the machine changing
+        // under us (a GPU reset, a driver pulled). Say so plainly instead of
+        // letting the muxer fail later with a message about null.
+        throw new Error('The video encoder could not be started: ' +
+          ((err && err.message) || err));
+      }
 
       if (audio) {
         run.audioEncoder = new AudioEncoder({
@@ -3001,7 +3079,15 @@ function pumpCapture(capture) {
           }
           run.videoEncoder.encode(out, opts);
           out.close();
-        } catch (err) { /* encoder closed */ }
+        } catch (err) {
+          // A frame the encoder refuses is the start of a file with sound and
+          // no picture, so it is counted and reported rather than swallowed.
+          run.encodeErrors = (run.encodeErrors || 0) + 1;
+          if (run.encodeErrors === 1) {
+            run.encodeError = err;
+            toast('A frame could not be encoded: ' + ((err && err.message) || err), true);
+          }
+        }
       });
       // In direct mode the canvas is black, so the closing hold (holdLastFrame)
       // needs the last real frame kept aside — one frame, replaced each time.
@@ -3012,7 +3098,16 @@ function pumpCapture(capture) {
       }
       frame.close();
       return loop();
-    }).catch(function () { /* track ended or reader released */ });
+    }).catch(function (err) {
+      // The reader rejects when the share ends — and also when the browser
+      // hands back a frame it cannot deliver. Either way the picture stops
+      // here for ever, while the audio pump keeps going, which is exactly the
+      // file with sound and no picture. Recorded so the run can say why.
+      if (!capture.videoEnded) {
+        capture.videoEnded = true;
+        capture.videoEndReason = err || null;
+      }
+    });
   }
   return loop();
 }
@@ -3168,6 +3263,18 @@ function finishSink(run) {
       if (run.videoEncoder && run.videoEncoder.state === 'configured') return run.videoEncoder.flush();
     })
     .then(function () {
+      // A video track that received no sample has no decoder config, and
+      // mp4-muxer throws "Cannot read properties of null (reading
+      // 'colorSpace')" while writing the track header. That raw message tells
+      // the operator nothing, and the file it leaves behind is unplayable, so
+      // the real reason is reported instead.
+      if (!run.videoSamples) {
+        var why = run.encodeError
+          ? ((run.encodeError && run.encodeError.message) || run.encodeError)
+          : (shared && shared.videoEndReason && (shared.videoEndReason.message || shared.videoEndReason))
+            || 'the screen delivered no frames';
+        throw new Error('No picture was recorded: ' + why);
+      }
       if (run.muxer) run.muxer.finalize();
       return closeSink(run);
     })

@@ -698,6 +698,118 @@ def main():
                 check("a screen share with no system audio still records the mic",
                       mean_db is not None and mean_db > -60, f"{mean_db} dB mean")
 
+            # ---- a machine that cannot encode 4K -------------------------
+            # The shipped "cannot read null (reading 'colorSpace')" at Stop was
+            # this: the encoder accepted a 4K profile it could not really run,
+            # rejected every frame, and the video track reached finalize with no
+            # sample and no decoder config. A build with no 4K encoder must
+            # still record the best picture it can — not die at Stop and leave
+            # a file with sound only.
+            con.evaluate("""() => {
+              const real = VideoEncoder.isConfigSupported.bind(VideoEncoder);
+              window.__realIsConfig = real;
+              VideoEncoder.isConfigSupported = async function (config) {
+                // Pretend this machine has no 4K or 1440p encoder at all.
+                if (config && (config.width > 1920 || config.height > 1080)) {
+                  return { supported: false, config: config };
+                }
+                return real(config);
+              };
+            }""")
+            # A fresh fake screen: the previous section's stream had its tracks
+            # stopped when that recording ended, and a stub that returns the
+            # same ended stream would fail for a reason that has nothing to do
+            # with 4K support.
+            # The canvas is animated: a canvas captureStream only emits a frame
+            # when the canvas *changes*, and a static one would deliver its
+            # single frame before the encoder exists and then nothing at all.
+            con.evaluate("""() => {
+              const v = document.createElement('canvas');
+              v.width = 640; v.height = 360;
+              const c = v.getContext('2d');
+              let t = 0;
+              setInterval(() => {
+                t += 1;
+                c.fillStyle = '#3366cc';
+                c.fillRect(0, 0, 640, 360);
+                c.fillStyle = '#ffffff';
+                c.fillRect((t * 7) % 600, 40, 40, 40);
+              }, 33);
+              const stream = new MediaStream([v.captureStream(30).getVideoTracks()[0]]);
+              navigator.mediaDevices.getDisplayMedia = async () => stream;
+            }""")
+            # A toast leaves on its own, so collect them as they appear rather
+            # than reading the stack minutes later.
+            con.evaluate("""() => {
+              window.__toasts = [];
+              const stack = document.getElementById('toast-stack');
+              new MutationObserver(() => {
+                stack.querySelectorAll('*').forEach(n => {
+                  const t = (n.textContent || '').trim();
+                  if (t && window.__toasts.indexOf(t) === -1) window.__toasts.push(t);
+                });
+              }).observe(stack, { childList: true, subtree: true });
+            }""")
+            con.evaluate("""async () => {
+              const root = await navigator.storage.getDirectory();
+              for await (const [name] of root.entries()) {
+                await root.removeEntry(name, { recursive: true });
+              }
+            }""")
+            con.click("#record-btn")
+            con.wait_for_timeout(6000)
+            started = not con.evaluate("document.getElementById('rec-stop-btn').hidden")
+            toasts = con.evaluate("window.__toasts || []")
+            check("a machine with no 4K encoder still starts a recording", started,
+                  f"label={con.inner_text('#record-btn-label').strip()!r}")
+            if started:
+                con.click("#rec-stop-btn")
+                con.wait_for_timeout(6000)
+            toasts = con.evaluate("window.__toasts || []")
+            toast_text = " | ".join(toasts)
+            check("a fallback to a smaller picture is reported",
+                  "1920" in toast_text or "1080" in toast_text or "4K" in toast_text,
+                  toast_text[:70])
+            check("a machine with no 4K encoder does not fail at Stop",
+                  "No picture was recorded" not in toast_text, toast_text[:70])
+
+            ffmpeg_bin = find_ffmpeg()
+            if ffmpeg_bin:
+                mp4_bytes = con.evaluate("""async () => {
+                  const root = await navigator.storage.getDirectory();
+                  async function mp4(dir){
+                    for await (const [name, h] of dir.entries()){
+                      if (h.kind === 'directory'){ const r = await mp4(h); if (r) return r; }
+                      else if (name.endsWith('.mp4')) return await h.getFile();
+                    }
+                    return null;
+                  }
+                  const f = await mp4(root);
+                  if (!f) return null;
+                  const buf = new Uint8Array(await f.arrayBuffer());
+                  let s = '';
+                  for (let i = 0; i < buf.length; i++) s += String.fromCharCode(buf[i]);
+                  return btoa(s);
+                }""")
+                check("the fallback machine still wrote a file", bool(mp4_bytes),
+                      f"{len(mp4_bytes or '')} b64 chars")
+                if mp4_bytes:
+                    import base64, tempfile
+                    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+                        tmp.write(base64.b64decode(mp4_bytes))
+                        fallback_path = tmp.name
+                    stats = subprocess.run(
+                        [ffmpeg_bin, "-hide_banner", "-i", fallback_path,
+                         "-vf", "signalstats,metadata=print:key=lavfi.signalstats.YAVG",
+                         "-frames:v", "3", "-f", "null", "-"],
+                        capture_output=True, text=True).stderr
+                    luma = [float(x) for x in
+                            re.findall(r"lavfi\.signalstats\.YAVG=([\d.]+)", stats)]
+                    pathlib.Path(fallback_path).unlink(missing_ok=True)
+                    check("the fallback recording has a real picture, not black",
+                          bool(luma) and max(luma) > 24, luma[:3])
+            con.evaluate("() => { VideoEncoder.isConfigSupported = window.__realIsConfig; }")
+
             print()
             print("page errors:", errs)
             check("no page errors anywhere", not errs)

@@ -258,16 +258,39 @@ body.console{
   z-index:3;
 }
 
-/* One row, each mode an equal share of the width. */
+/* One row, each mode an equal share of the width. Ten names share the line
+   now that the two combined views exist, so the type is clamped harder than
+   it once was rather than clipping any label. */
 .console__modes .segmented{ flex-wrap:nowrap; }
 .console__modes .segmented button{
   flex:1 1 0;
   min-width:0;
   white-space:nowrap;
   /* Shrink the labels rather than clip them: every mode name has to stay
-     readable, and seven of them share one line however narrow the window is. */
-  font-size:clamp(.66rem, 1.02vw, .85rem);
-  padding:.6rem .4rem;
+     readable however narrow the window is. */
+  font-size:clamp(.62rem, .88vw, .82rem);
+  padding:.6rem .28rem;
+  letter-spacing:0;
+}
+
+/* --------------------------------------------------------------------------
+   Audio input level meter — a bar that fills with the input's peak level
+   while the operator checks a desk or a phone before a service.
+   -------------------------------------------------------------------------- */
+.level-meter{
+  height:.6rem;
+  margin-top:.6rem;
+  border-radius:999px;
+  background:rgba(248,249,253,.12);
+  overflow:hidden;
+}
+.level-meter span{
+  display:block;
+  width:0;
+  height:100%;
+  border-radius:999px;
+  background:linear-gradient(90deg, var(--sunrise-orange), var(--sunrise-amber));
+  transition:width .1s linear;
 }
 
 /* --------------------------------------------------------------------------

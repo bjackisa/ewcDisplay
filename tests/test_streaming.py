@@ -220,8 +220,12 @@ def main():
             ])
             ctx = browser.new_context(viewport={"width": 1500, "height": 900})
             errs = []
+
+            def watch(page):
+                page.on("pageerror", lambda e: errs.append(str(e)))
+
             con = ctx.new_page()
-            con.on("pageerror", lambda e: errs.append(str(e)))
+            watch(con)
             con.goto(f"{base}/console.html", wait_until="load")
             con.evaluate(STUB_CAPTURE)
             con.wait_for_timeout(800)
@@ -325,6 +329,110 @@ def main():
             db = mean_volume(out_path)
             check("the relayed audio is not silent",
                   db is not None and db > -60, f"mean {db} dB")
+
+            check("no page errors anywhere", not errs, str(errs)[:200])
+
+            # ---------- a weak uplink -------------------------------------
+            # A fresh relay: the one above was stopped to inspect its file.
+            weak_ingest = RtmpIngest(free_port(), "/tmp/ewc_stream_weak.flv")
+            weak_ingest.start()
+            weak_url = weak_ingest.url
+            # The church's uplink is not a data centre's. A congested link must
+            # make the stream *smaller*, not end it: the encoder is stepped down
+            # the ladder while the picture keeps flowing, and stepped back up
+            # when the link recovers. This runs the real console against a fake
+            # socket buffer — everything except the congestion is real.
+            weak = ctx.new_page(); watch(weak)
+            weak.goto(f"{base}/console.html", wait_until="load")
+            weak.evaluate(STUB_CAPTURE)
+            weak.wait_for_timeout(600)
+            weak.evaluate("""() => {
+              const Real = window.WebSocket;
+              window.WebSocket = function (url) {
+                const ws = new Real(url);
+                Object.defineProperty(ws, 'bufferedAmount', {
+                  get: () => window.__buffer || 0, configurable: true });
+                return ws;
+              };
+              window.WebSocket.prototype = Real.prototype;
+              window.__ladder = [];
+              const configure = VideoEncoder.prototype.configure;
+              VideoEncoder.prototype.configure = function (c) {
+                if (c && c.bitrate) window.__ladder.push(c.bitrate);
+                return configure.call(this, c);
+              };
+            }""")
+            weak.click("#stream-setup > summary")
+            weak.wait_for_timeout(200)
+            weak.fill("#rtmp-url-input", weak_url)
+            weak.fill("#rtmp-key-input", "weak")
+            weak.click("#live-btn")
+            weak.wait_for_timeout(4000)
+            top = weak.evaluate("window.__ladder.slice()")
+            check("the stream opens at the top of its bitrate ladder",
+                  bool(top) and top[0] == max(top), top[:2])
+
+            # Six seconds of unsent bytes is what a congested uplink looks like.
+            weak.evaluate("window.__buffer = 12000000 / 8 * 6")
+            weak.wait_for_timeout(6000)
+            stepped = weak.evaluate("window.__ladder.slice()")
+            check("a congested uplink steps the bitrate down",
+                  len(stepped) > len(top) and stepped[-1] < top[0], stepped)
+            check("the stream is still on air through the congestion",
+                  weak.evaluate("!document.getElementById('live-stop-btn').hidden"))
+            check("the bitrate never drops below the ladder's floor",
+                  all(b >= 1500000 for b in stepped), stepped)
+            weak.evaluate("window.__buffer = 0")
+            weak.wait_for_timeout(12000)
+            recovered = weak.evaluate("window.__ladder.slice()")
+            check("the bitrate climbs back once the uplink recovers",
+                  recovered[-1] > stepped[-1], recovered[-4:])
+            check("the weak-uplink run raised no page errors",
+                  not [e for e in errs if 'console' in e], str(errs)[:200])
+            weak_ingest.stop()
+            weak.close()
+
+            # ---------- a dropped relay socket -----------------------------
+            # The relay socket dying is a normal event on a church network; the
+            # stream must reopen it rather than stop, and the time on air must
+            # not reset, or the operator thinks the broadcast ended.
+            drop_ingest = RtmpIngest(free_port(), "/tmp/ewc_stream_drop.flv")
+            drop_ingest.start()
+            drop = ctx.new_page(); watch(drop)
+            drop.goto(f"{base}/console.html", wait_until="load")
+            drop.evaluate(STUB_CAPTURE)
+            drop.wait_for_timeout(600)
+            drop.evaluate("""() => {
+              const Real = window.WebSocket;
+              window.__sockets = [];
+              window.WebSocket = function (url) {
+                const ws = new Real(url);
+                window.__sockets.push(ws);
+                return ws;
+              };
+              window.WebSocket.prototype = Real.prototype;
+            }""")
+            drop.click("#stream-setup > summary")
+            drop.wait_for_timeout(200)
+            drop.fill("#rtmp-url-input", drop_ingest.url)
+            drop.fill("#rtmp-key-input", "drop")
+            drop.click("#live-btn")
+            drop.wait_for_timeout(4000)
+            check("the drop test got on air",
+                  not drop.evaluate("document.getElementById('live-stop-btn').hidden"))
+            before_sockets = drop.evaluate("window.__sockets.length")
+            drop.evaluate("window.__sockets[window.__sockets.length - 1].close()")
+            drop.wait_for_timeout(6000)
+            after_sockets = drop.evaluate("window.__sockets.length")
+            check("a dropped relay socket is reopened",
+                  after_sockets > before_sockets, f"{before_sockets} -> {after_sockets}")
+            check("the stream is still on air after the drop",
+                  not drop.evaluate("document.getElementById('live-stop-btn').hidden"))
+            drop_label = drop.inner_text("#live-btn-label")
+            check("the time on air did not reset with the socket",
+                  drop_label not in ("Go Live", "Connecting…", "0:00"), drop_label)
+            drop_ingest.stop()
+            drop.close()
 
             check("no page errors anywhere", not errs, str(errs)[:200])
             browser.close()

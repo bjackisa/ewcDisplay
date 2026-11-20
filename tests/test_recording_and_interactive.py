@@ -431,6 +431,28 @@ def main():
                 mean_db = float(m.group(1)) if m else None
                 check("the recorded audio is actually audible, not silent",
                       mean_db is not None and mean_db > -60, f"{mean_db} dB mean")
+
+                # A track with samples in it is not the same as a picture. A
+                # WebCodecs chunk often carries no duration, and mp4-muxer
+                # rejects such a chunk; the throw used to be swallowed, every
+                # video sample was dropped, and the file came out with audio and
+                # a black screen — the shipped "black screen with audio" bug.
+                # Measure the real luminance of a frame.
+                with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+                    tmp.write(base64.b64decode(mp4_bytes))
+                    pic_path = tmp.name
+                stats = subprocess.run(
+                    [ffmpeg_bin, "-hide_banner", "-i", pic_path,
+                     "-vf", "signalstats,metadata=print:key=lavfi.signalstats.YAVG",
+                     "-frames:v", "3", "-f", "null", "-"],
+                    capture_output=True, text=True).stderr
+                pathlib.Path(pic_path).unlink(missing_ok=True)
+                luma = [float(x) for x in
+                        re.findall(r"lavfi\.signalstats\.YAVG=([\d.]+)", stats)]
+                # The fake capture draws on a canvas, so a real frame is well
+                # clear of black (YAVG 16 is pure black in limited range).
+                check("the recorded picture is not a black screen",
+                      bool(luma) and max(luma) > 24, luma[:3])
             else:
                 print("SKIP  ffmpeg not installed — audio level not measured")
 

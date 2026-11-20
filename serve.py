@@ -69,7 +69,14 @@ USER_AGENT = (
 # if the socket drops.
 STREAM_INPUT_ARGS = [
     "-hide_banner", "-loglevel", "warning", "-nostdin",
+    # A pipe has no seek index, so ffmpeg has to trust the timestamps it is
+    # handed: genpts fills in a missing one, igndts throws away the encoder's
+    # (already rebased) decode stamps rather than reordering on them.
     "-fflags", "+genpts+igndts",
+    # Start relaying quickly. The defaults probe for 5 seconds and analyse for
+    # 5 MB before the first packet leaves, which on a live service is 5 seconds
+    # of the congregation staring at a loading spinner.
+    "-probesize", "1000000", "-analyzeduration", "1000000",
     "-f", "mp4", "-i", "pipe:0",
 ]
 # The video is always copied — the console encoded it, so re-encoding would only
@@ -78,6 +85,16 @@ STREAM_INPUT_ARGS = [
 # audio alone is transcoded, which is the difference between a stream with sound
 # and one without. The output format args come last.
 STREAM_OUTPUT_ARGS = [
+    # Keep the picture's own timing: no duplicated or dropped frames to smooth
+    # a rate the encoder already chose.
+    "-fps_mode", "passthrough",
+    # A deep muxer queue so a hiccup in the RTMP socket buffers packets instead
+    # of failing the run with "Too many packets buffered for output stream" —
+    # the classic reason a copy-mode live stream dies a minute in.
+    "-max_muxing_queue_size", "8192",
+    # Do not let the muxer hold packets back for late audio: a live stream must
+    # stay live even if one track briefly lags the other.
+    "-max_interleave_delta", "0",
     "-flvflags", "no_duration_filesize",
     "-f", "flv",
 ]
@@ -493,6 +510,7 @@ class StreamSession:
         self.stop_event = threading.Event()
         self.proc = None
         self.stderr_tail = []
+        self.last_data_at = 0.0
         self.ended = threading.Event()
 
     def _set(self, state: str, detail: str = "") -> None:
@@ -503,11 +521,16 @@ class StreamSession:
 
     def snapshot(self) -> dict:
         with self.lock:
+            elapsed = max(0.001, time.time() - self.started_at)
             return {
                 "state": self.state,
                 "detail": self.detail,
-                "seconds": round(time.time() - self.started_at, 1),
+                "seconds": round(elapsed, 1),
                 "bytes": self.bytes_in,
+                # The average rate the relay has been fed, so the console can
+                # tell a healthy stream from a trickle.
+                "kbps": round(self.bytes_in * 8 / elapsed / 1000, 1),
+                "idle": round(time.time() - (self.last_data_at or time.time()), 1),
                 "url": _redact_url(self.rtmp_url),
             }
 
@@ -582,6 +605,7 @@ class StreamSession:
                     self._set(STREAM_FAILED, tail)
                     break
                 self.bytes_in += len(chunk)
+                self.last_data_at = time.time()
                 if not live_marked and self.bytes_in >= 131072:
                     live_marked = True
                     self._set(STREAM_LIVE, "")

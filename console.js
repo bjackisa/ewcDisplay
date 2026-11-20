@@ -63,7 +63,15 @@
     /* Which physical camera to open, by deviceId. Null means "let the display
        choose" — which is the right thing when the machine has one camera, or
        when the list has not been read yet. */
-    cameraDeviceId: null
+    cameraDeviceId: null,
+    /* Which audio input the recording/stream takes. Null means the system
+       default microphone. A DroidCam phone or a mixing desk on the line-in
+       jack is just another audioinput here. */
+    audioDeviceId: null,
+    /* A mixing desk's output is already mixed, so the browser's voice
+       processing (echo cancellation, noise suppression, auto-gain) must be off
+       for it or it fights the desk. */
+    audioLineIn: false
   };
 
   /** The last thing launched. `null` mode means nothing has been launched.
@@ -126,6 +134,9 @@
     cameraStatusConsole: document.getElementById('camera-status-console'),
     cameraDeviceSelect: document.getElementById('camera-device-select'),
     cameraDeviceHint: document.getElementById('camera-device-hint'),
+    audioDeviceSelect: document.getElementById('audio-device-select'),
+    audioDeviceHint: document.getElementById('audio-device-hint'),
+    audioLineInToggle: document.getElementById('audio-linein-toggle'),
     eventNameInput: document.getElementById('event-name-input'),
     targetDatetimeInput: document.getElementById('target-datetime-input'),
     nextSundayBtn: document.getElementById('next-sunday-btn'),
@@ -196,7 +207,9 @@
         text: preview.text,
         media: preview.media,
         webpageUrl: preview.webpageUrl,
-        cameraDeviceId: preview.cameraDeviceId
+        cameraDeviceId: preview.cameraDeviceId,
+        audioDeviceId: preview.audioDeviceId,
+        audioLineIn: preview.audioLineIn
       }));
     } catch (err) {
       console.warn('Could not save settings:', err);
@@ -213,10 +226,15 @@
 
   /** Turns the preview state into the `content` payload the display applies. */
   function buildContent(state) {
-    if (state.mode === 'timer') {
+    var mode = state.mode;
+    // The combined views carry the same content as the panel they combine;
+    // only the display's rendering differs.
+    if (mode === 'scripture-camera') mode = 'scripture';
+    else if (mode === 'lyrics-camera') mode = 'lyrics';
+    if (mode === 'timer') {
       return { eventName: state.eventName, targetISO: state.targetISO };
     }
-    if (state.mode === 'scripture') {
+    if (mode === 'scripture') {
       if (!bibleData) {
         return { text: 'Scripture unavailable', reference: 'The Bible has not loaded.' };
       }
@@ -228,7 +246,7 @@
         reference: EWC.bookName(bibleData, state.scriptureBookIndex) + ' ' + state.scriptureChapter + ':' + state.scriptureVerse
       };
     }
-    if (state.mode === 'lyrics') {
+    if (mode === 'lyrics') {
       var song = getActiveSong();
       if (!song) {
         return {
@@ -267,8 +285,15 @@
       webpageUrl: state.mode === 'webpage' ? (state.webpageUrl || '') : '',
       // Which camera to open, by deviceId. Only a string crosses the bus; the
       // display opens the device itself. Null lets the display pick its own.
-      cameraDeviceId: state.mode === 'camera' ? (state.cameraDeviceId || null) : null
+      // The two combined views need a camera just as much as the camera panel.
+      cameraDeviceId: modeNeedsCamera(state.mode) ? (state.cameraDeviceId || null) : null
     };
+  }
+
+  /** Modes that put the live camera on the glass: the camera panel and the two
+   *  combined views. */
+  function modeNeedsCamera(mode) {
+    return mode === 'camera' || mode === 'lyrics-camera' || mode === 'scripture-camera';
   }
 
   /* ==========================================================================
@@ -303,7 +328,7 @@
       panelHidden: preview.panelHidden,
       media: preview.mode === 'media' ? preview.media : null,
       webpageUrl: preview.mode === 'webpage' ? (preview.webpageUrl || '') : '',
-      cameraDeviceId: preview.mode === 'camera' ? (preview.cameraDeviceId || null) : null
+      cameraDeviceId: modeNeedsCamera(preview.mode) ? (preview.cameraDeviceId || null) : null
     });
   }
 
@@ -462,9 +487,18 @@
    *  book/chapter or a new song, the preview has drifted, so stepping it must
    *  still wait for Launch like any other new content. */
   function previewIsLive(mode) {
-    return liveMatchesMode(mode) &&
+    return modeFamily(live.mode) === modeFamily(mode) &&
       fingerprint(live.mode, live.content, live.panelHidden) ===
       fingerprint(preview.mode, buildContent(preview), preview.panelHidden);
+  }
+
+  /** A panel and its combined view are the same family: stepping a verse while
+   *  Scripture + Camera is on the glass is the same live move as stepping it on
+   *  the plain scripture panel. */
+  function modeFamily(mode) {
+    if (mode === 'scripture-camera') return 'scripture';
+    if (mode === 'lyrics-camera') return 'lyrics';
+    return mode;
   }
 
   /** Applies a step. `wasLive` says whether the preview was the live view
@@ -521,8 +555,9 @@
   el.nextBtn.addEventListener('click', function () { stepFocused(1); });
 
   function stepFocused(direction) {
-    if (preview.mode === 'scripture') stepScripture(direction);
-    else if (preview.mode === 'lyrics') stepLyric(direction);
+    var family = modeFamily(preview.mode);
+    if (family === 'scripture') stepScripture(direction);
+    else if (family === 'lyrics') stepLyric(direction);
   }
 
   /* ==========================================================================
@@ -805,7 +840,9 @@
     preview.scriptureChapter = chapter;
     preview.scriptureVerse = verse;
     renderScripture();
-    setMode('scripture');
+    // Stay in whichever scripture view the operator is working in: finding a
+    // verse while Scripture + Camera is on screen must not drop the camera.
+    setMode(modeFamily(preview.mode) === 'scripture' ? preview.mode : 'scripture');
     afterPreviewChange();
 
     var label = EWC.bookName(bibleData, bookIndex) + ' ' + chapter + ':' + verse;
@@ -1438,8 +1475,9 @@
     preview.cameraDeviceId = el.cameraDeviceSelect.value || null;
     savePersisted();
     // Switching camera is live once the feed is on the screen — the operator
-    // wants the other camera up now, not after another Launch.
-    if (liveMatchesMode('camera')) pushLive(false);
+    // wants the other camera up now, not after another Launch. The combined
+    // views show the same feed, so they follow it too.
+    if (modeNeedsCamera(live.mode)) pushLive(false);
   });
 
   if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
@@ -1620,14 +1658,23 @@
      12. MODE SWITCHING + TIMER FIELDS
      ========================================================================== */
 
+  /** Which control groups a mode needs. The two combined views show the panel
+   *  they carry *and* the camera picker, because they need both. */
+  function fieldGroupsForMode(mode) {
+    if (mode === 'scripture-camera') return ['scripture', 'camera'];
+    if (mode === 'lyrics-camera') return ['lyrics', 'camera'];
+    return [mode];
+  }
+
   function setMode(mode) {
     preview.mode = mode;
 
     // Only the chosen panel's own controls are shown — no hunting down a long
     // rail for the fields that happen to matter right now.
+    var groups = fieldGroupsForMode(mode);
     ['timer', 'clock', 'scripture', 'lyrics', 'text', 'media', 'camera', 'webpage'].forEach(function (m) {
       var group = document.getElementById(m + '-fields');
-      if (group) group.hidden = m !== mode;
+      if (group) group.hidden = groups.indexOf(m) < 0;
     });
 
     el.modeToggleGroup.querySelectorAll('button').forEach(function (btn) {
@@ -1637,8 +1684,10 @@
     // Camera: list the connected cameras and, the first time, ask for
     // permission so their real names appear. Nothing reaches the screen until
     // Launch is pressed.
-    if (mode === 'camera') {
-      setCameraStatus('Camera panel selected — press Launch to open the chosen camera on the display.');
+    if (modeNeedsCamera(mode)) {
+      setCameraStatus(mode === 'camera'
+        ? 'Camera panel selected — press Launch to open the chosen camera on the display.'
+        : 'The camera fills the panel and the words sit across the bottom — press Launch to show it.');
       refreshCameras().then(primeCameraNames);
     }
 
@@ -1692,6 +1741,180 @@
     afterPreviewChange();
   });
 
+/* --------------------------------------------------------------------------
+   Audio input — the microphone, a phone acting as a wireless mic, or a mixing
+   desk on the line-in jack.
+
+   A DroidCam phone's audio arrives as an ordinary `audioinput` once its driver
+   or app has registered a virtual device, so it needs no special handling: it
+   is in the list and the operator picks it. A desk into the line-in jack is the
+   same idea, except that the browser's voice processing must be switched off
+   for it — echo cancellation, noise suppression and auto-gain are tuned for a
+   laptop mic a metre from a mouth, and against a mixed desk feed they pump the
+   level and thin the sound. That is what the Line-in switch does.
+
+   Device names only appear once permission has been granted, so the picker is
+   primed with one prompt the first time (the same trade the camera picker
+   makes) and then re-listed.
+   -------------------------------------------------------------------------- */
+
+var AUDIO_INPUT_KEY = 'ewc-display-audio-input-v1';
+
+function audioConstraints(deviceId, lineIn) {
+  var audio = {
+    echoCancellation: !lineIn,
+    noiseSuppression: !lineIn,
+    autoGainControl: !lineIn
+  };
+  if (deviceId) audio.deviceId = { exact: deviceId };
+  return audio;
+}
+
+function audioLabel(device, index) {
+  return device.label || 'Input ' + (index + 1);
+}
+
+function setAudioDeviceHint(message) {
+  el.audioDeviceHint.textContent = message;
+}
+
+/** Fills the audio picker from the current device list, keeping the operator's
+ *  choice where the device is still present. */
+function renderAudioOptions() {
+  var select = el.audioDeviceSelect;
+  if (!select) return;
+  select.innerHTML = '';
+  var auto = document.createElement('option');
+  auto.value = '';
+  auto.textContent = 'Default input';
+  select.appendChild(auto);
+
+  audioDevices.forEach(function (device, i) {
+    var option = document.createElement('option');
+    option.value = device.deviceId || '';
+    option.textContent = audioLabel(device, i);
+    select.appendChild(option);
+  });
+
+  var stillThere = !preview.audioDeviceId ||
+    audioDevices.some(function (d) { return d.deviceId === preview.audioDeviceId; });
+  if (!stillThere) preview.audioDeviceId = null;
+  select.value = preview.audioDeviceId || '';
+  select.disabled = false;
+
+  if (!audioDevices.length) {
+    setAudioDeviceHint('No audio input was found — the recording will carry the screen\'s own sound.');
+  } else if (audioDevices.length === 1) {
+    setAudioDeviceHint('One input found. Plug in a phone (DroidCam) or a mixer and it appears here.');
+  } else {
+    setAudioDeviceHint(audioDevices.length + ' inputs found — pick the microphone, phone or mixer to record.');
+  }
+}
+
+function refreshAudioInputs() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+    setAudioDeviceHint('This browser cannot list audio inputs.');
+    return Promise.resolve();
+  }
+  return navigator.mediaDevices.enumerateDevices().then(function (devices) {
+    audioDevices = devices.filter(function (d) { return d.kind === 'audioinput'; });
+    renderAudioOptions();
+  }).catch(function (err) {
+    console.warn('Could not list audio inputs:', err);
+    setAudioDeviceHint('Could not read the audio input list.');
+  });
+}
+
+/** One prompt so real device names appear, then re-list. Stopped at once: the
+ *  capture opens the real input when it starts. */
+function primeAudioNames() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+  if (audioDevices.length && audioDevices.every(function (d) { return d.label; })) return;
+  navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+    stream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) {} });
+    return refreshAudioInputs();
+  }).catch(function () { /* refused: the ids are still usable */ });
+}
+
+function setAudioLineIn(on) {
+  preview.audioLineIn = !!on;
+  el.audioLineInToggle.classList.toggle('is-on', preview.audioLineIn);
+  el.audioLineInToggle.setAttribute('aria-checked', preview.audioLineIn ? 'true' : 'false');
+  savePersisted();
+}
+
+/** Plays the chosen input for a moment and moves a meter with its level, so
+ *  the operator can prove the desk or phone is actually feeding sound before
+ *  a service rather than after a silent recording. */
+function checkAudioLevel() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setAudioDeviceHint('This browser cannot open an audio input.');
+    return;
+  }
+  var meter = document.getElementById('audio-level-meter');
+  var bar = meter && meter.querySelector('span');
+  if (meter) meter.hidden = false;
+  setAudioDeviceHint('Listening…');
+  // The same opener the recording uses, so a device that has gone falls back
+  // to the default input here too instead of failing only on the glass.
+  requestMic().then(function (result) {
+    if (!result) {
+      if (meter) meter.hidden = true;
+      setAudioDeviceHint('Could not open that input — check the device and its cable.');
+      return;
+    }
+    var stream = result.stream;
+    if (result.fellBack) setAudioDeviceHint('That input is gone — listening on the default.');
+    var AudioCtor = window.AudioContext || window.webkitAudioContext;
+    var context = new AudioCtor();
+    var source = context.createMediaStreamSource(stream);
+    var analyser = context.createAnalyser();
+    analyser.fftSize = 1024;
+    source.connect(analyser);
+    var samples = new Uint8Array(analyser.fftSize);
+    var peak = 0;
+    var ticks = 0;
+    var timer = setInterval(function () {
+      analyser.getByteTimeDomainData(samples);
+      var max = 0;
+      for (var i = 0; i < samples.length; i++) {
+        max = Math.max(max, Math.abs(samples[i] - 128));
+      }
+      var level = Math.min(1, max / 96);
+      peak = Math.max(peak, level);
+      if (bar) bar.style.width = Math.round(level * 100) + '%';
+      ticks += 1;
+      if (ticks >= 24) {
+        clearInterval(timer);
+        stream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) {} });
+        try { source.disconnect(); } catch (e) {}
+        try { context.close(); } catch (e) {}
+        if (bar) bar.style.width = '0%';
+        setAudioDeviceHint(peak > 0.04
+          ? 'Sound is arriving on this input.'
+          : 'No sound arrived — check the device, its cable and its level.');
+      }
+    }, 100);
+  }).catch(function (err) {
+    if (meter) meter.hidden = true;
+    setAudioDeviceHint('Could not open that input: ' + ((err && err.message) || err));
+  });
+}
+
+el.audioDeviceSelect.addEventListener('change', function () {
+  preview.audioDeviceId = el.audioDeviceSelect.value || null;
+  savePersisted();
+  // A device switch takes effect on the next recording or stream; an already
+  // running one keeps the input it opened, because swapping the track
+  // underneath a live encoder would break the file.
+  if (rec || air) setAudioDeviceHint('Saved — it applies to the next recording or stream.');
+});
+el.audioLineInToggle.addEventListener('click', function () { setAudioLineIn(!preview.audioLineIn); });
+document.getElementById('audio-test-btn').addEventListener('click', checkAudioLevel);
+if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+  navigator.mediaDevices.addEventListener('devicechange', refreshAudioInputs);
+}
+
   /* ==========================================================================
      13. RECORDING THE LIVE DISPLAY
 
@@ -1740,6 +1963,8 @@ var REC_KEYFRAME_SECONDS = 1;
    in units of REC_FRAME_RATE, so anything closer than one frame period would be
    written with a duplicate decode timestamp. */
 var REC_MIN_STEP_MICROS = Math.floor(1000000 / REC_FRAME_RATE);
+/* One frame period, used as the duration of a chunk that does not carry one. */
+var REC_FRAME_PERIOD_MICROS = Math.floor(1000000 / REC_FRAME_RATE);
 
 /* Streaming. The RTMP relay lives on the server, because no browser can speak
    RTMP; the console encodes the same 4K picture it records and posts the
@@ -1766,16 +1991,33 @@ var STREAM_WS_PATH = '/stream/ws';
 /* Fragments are cut at a keyframe this often, so ffmpeg is never more than a
    fragment behind and the relay's own RTMP flush has something to send. */
 var STREAM_FRAGMENT_SECONDS = 1;
-/* How much encoded video may wait for the relay before the uplink is declared
-   too slow. A few seconds of the stream bitrate: enough to ride out a hiccup,
-   little enough that the stream never falls minutes behind live. */
-var STREAM_MAX_QUEUE_BYTES = Math.round(STREAM_VIDEO_BPS / 8 * 6);
+/* A weak uplink must never end the stream — it must lower the picture until
+   it fits. The bitrate ladder is walked down as the relay's send buffer
+   grows and back up when it drains, which is what every production encoder
+   (OBS, vMix, Wirecast) does with its own adaptive-bitrate controller. The
+   floor is deliberately low: a soft, blocky picture is still a service. */
+var STREAM_BITRATE_STEPS = [12000000, 8000000, 5000000, 3200000, 2200000, 1500000];
+var STREAM_ABR_SOFT_SECONDS = 2.5;   // buffered this far → step the bitrate down
+var STREAM_ABR_HARD_SECONDS = 9;     // buffered this far → drop input frames
+var STREAM_ABR_RECOVER_SECONDS = 6;  // buffered this low this long → step up
+var STREAM_MAX_QUEUE_BYTES = Math.round(STREAM_VIDEO_BPS / 8 * STREAM_ABR_HARD_SECONDS);
+/* How long the relay socket may stay closed mid-stream before the operator is
+   told, and how many times it is reopened. A church uplink drops for seconds
+   at a time; the stream should ride that out, not end. */
+var STREAM_RECONNECT_ATTEMPTS = 12;
+var STREAM_RECONNECT_MAX_MS = 8000;
+/* How much of the fragmented MP4's opening bytes are kept so a reconnected
+   relay can be handed the init segment again. ftyp + moov for a stream this
+   size is a few kilobytes; the cap is generous and fixed. */
+var STREAM_INIT_CAP = 512 * 1024;
 var STREAM_KEY_STORAGE = 'ewc-display-rtmp-v1';
 var STREAM_DEFAULT_URL = 'rtmp://a.rtmp.youtube.com/live2';
 var STREAM_DEFAULT_BACKUP = 'rtmp://b.rtmp.youtube.com/live2?backup=1';
 
 var rec = null;
 var air = null;
+/* The audio inputs the machine offers. Filled by refreshAudioInputs(). */
+var audioDevices = [];
 /* The capture both sinks share. One getDisplayMedia, one screen-picker
    prompt, and either sink may come or go without disturbing the other. */
 var shared = null;
@@ -2083,6 +2325,9 @@ function buildAudioMix(stream, primedContext) {
   var context = (primedContext && primedContext.state !== 'closed') ? primedContext : null;
 
   return requestMic().then(function (mic) {
+    if (mic && mic.fellBack) {
+      toast('The chosen audio input was not available — using the default microphone.', true);
+    }
     var micTrack = mic && mic.stream ? mic.stream.getAudioTracks()[0] : null;
 
     // No source at all.
@@ -2173,15 +2418,29 @@ function teardownContext(context) {
   if (context && context.state !== 'closed') { try { context.close(); } catch (e) {} }
 }
 
-/** Asks for the microphone, tolerating a refusal or an absent device. */
+/** Asks for the chosen audio input — the microphone, a phone acting as a
+ *  wireless mic, or a desk on the line-in jack — tolerating a refusal or an
+ *  absent device. The operator's pick is in the console state, so the capture
+ *  and the level check open the same input. */
 function requestMic() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     return Promise.resolve(null);
   }
   return navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    audio: audioConstraints(preview.audioDeviceId, preview.audioLineIn)
   }).then(function (stream) { return { stream: stream }; })
-    .catch(function () { return null; });
+    .catch(function (err) {
+      // A chosen device that has gone (a phone that dropped off Wi-Fi, a desk
+      // unplugged) must not cost the whole recording its microphone: fall back
+      // to the default input and say so.
+      if (preview.audioDeviceId && err && err.name === 'OverconstrainedError') {
+        return navigator.mediaDevices.getUserMedia({
+          audio: audioConstraints(null, preview.audioLineIn)
+        }).then(function (stream) { return { stream: stream, fellBack: true }; })
+          .catch(function () { return null; });
+      }
+      return null;
+    });
 }
 
 /** Built inside the click handler, where a user gesture is live, so Chrome
@@ -2229,7 +2488,15 @@ function createCompositor(capture) {
 
 /** Builds the 4K canvas both sinks encode from, plus the letterbox geometry for
  *  the capture now in hand. One canvas means the picture recorded and the
- *  picture streamed are the same picture. */
+ *  picture streamed are the same picture.
+ *
+ *  The context is a plain accelerated 2D canvas on purpose. `desynchronized:
+ *  true` asks Chrome for a low-latency surface whose contents are handed to the
+ *  compositor asynchronously, and a `VideoFrame` snapshotted from such a canvas
+ *  in the same task as the `drawImage` that filled it comes back *black* on
+ *  several GPU/driver combinations — a recording with a perfect audio track and
+ *  a black picture. Nothing here needs low latency; the encode is allowed to
+ *  lag. */
 function createCaptureCanvas(captureWidth, captureHeight) {
   var canvas = document.createElement('canvas');
   canvas.width = REC_TARGET_SIZES[0][0];
@@ -2239,7 +2506,7 @@ function createCaptureCanvas(captureWidth, captureHeight) {
   var drawHeight = Math.round(captureHeight * scale);
   return {
     canvas: canvas,
-    ctx: canvas.getContext('2d', { alpha: false, desynchronized: true }),
+    ctx: canvas.getContext('2d', { alpha: false }),
     dx: Math.round((canvas.width - drawWidth) / 2),
     dy: Math.round((canvas.height - drawHeight) / 2),
     drawWidth: drawWidth,
@@ -2298,7 +2565,9 @@ function buildPipeline(run, audioMix) {
     height: target[1],
     frameRate: REC_FRAME_RATE
   };
-  var videoBps = run.sink === 'stream' ? STREAM_VIDEO_BPS : REC_VIDEO_BPS;
+  var videoBps = run.sink === 'stream'
+    ? STREAM_BITRATE_STEPS[0]
+    : REC_VIDEO_BPS;
   var audioTrack = (audioMix && audioMix.hasAny) ? audioMix.stream.getAudioTracks()[0] : null;
 
   return chooseAudioCodec(audioTrack, run.sink, run.audioHint,
@@ -2348,7 +2617,10 @@ function buildPipeline(run, audioMix) {
         output: function (chunk, meta) { onChunk(run, chunk, meta, true); },
         error: function (e) { sinkFailure(run, e); }
       });
-      run.videoEncoder.configure({
+      // The stream's bitrate is the ladder's top step and is re-configured at
+      // run time as the uplink changes; the recording's is fixed.
+      run.videoBps = videoBps;
+      run.videoConfig = {
         codec: 'avc1.640033',
         width: video.width,
         height: video.height,
@@ -2360,7 +2632,8 @@ function buildPipeline(run, audioMix) {
         // reference chain. 'quality' would reorder for a little more
         // compression, which is exactly what a screen capture cannot afford.
         latencyMode: 'realtime'
-      });
+      };
+      run.videoEncoder.configure(run.videoConfig);
 
       if (audio) {
         run.audioEncoder = new AudioEncoder({
@@ -2440,7 +2713,11 @@ function awaitStreamEnd(run) {
   return poll();
 }
 
-/** While on air, notices a relay that has died and ends the stream honestly. */
+/** While on air, keeps an eye on the relay. A relay that has stopped is not
+ *  treated as fatal on its own: the socket layer is already reopening it, and
+ *  only when the reconnect attempts are spent does the stream end. That is the
+ *  difference between a stream that survives a dropped uplink and one that
+ *  dies at the first hiccup. */
 function startLiveWatch(run) {
   stopLiveWatch();
   run.watch = setInterval(function () {
@@ -2449,11 +2726,17 @@ function startLiveWatch(run) {
       .then(function (r) { return r.json(); })
       .then(function (status) {
         if (run.finished || run.stopRequested) return;
-        if (status.state === 'failed') {
-          sinkFailure(run, new Error(status.detail || 'The relay stopped.'));
-        } else if (status.state === 'idle') {
-          // No session on the server any more: the relay went away.
-          sinkFailure(run, new Error('The relay is no longer running.'));
+        var down = status.state === 'failed' || status.state === 'idle';
+        if (!down) {
+          run.relayDownSince = null;
+          return;
+        }
+        // The relay went away. Give the socket reconnect its chance; only a
+        // sustained outage ends the stream.
+        if (!run.relayDownSince) run.relayDownSince = Date.now();
+        if (!run.reconnecting && !socketOpen(run)) scheduleStreamReconnect(run);
+        if (Date.now() - run.relayDownSince > 45000) {
+          sinkFailure(run, new Error(status.detail || 'The relay could not be restored.'));
         }
       })
       .catch(function () { /* a blip in the poll is not a failure */ });
@@ -2485,24 +2768,66 @@ function onChunk(run, chunk, meta, isVideo) {
   // chunk the encoder buffered across a pause, pushing that chunk behind the
   // ones already written — which drops a frame out of the reference chain.
   var rebased = chunk.timestamp - run.pausedMicros;
+  // A WebCodecs chunk's `duration` is frequently null — a screen-capture
+  // encoder is not obliged to fill it in — and mp4-muxer rejects a chunk whose
+  // duration is not a finite number. The throw used to be swallowed here, so
+  // every video sample was silently dropped, the video track never received a
+  // decoder config, and `finalize()` died on it: a 0-byte file, or a recording
+  // with audio and no picture. The duration is therefore always supplied — the
+  // chunk's own when it has one, otherwise the gap since the previous sample,
+  // otherwise one frame period.
+  var duration = Number.isFinite(chunk.duration) && chunk.duration > 0
+    ? chunk.duration
+    : (isVideo ? run.lastVideoDuration : run.lastAudioDuration) || 0;
   if (isVideo) {
     if (rebased <= run.lastVideoTs) return;
+    var videoGap = run.lastVideoTs >= 0 ? rebased - run.lastVideoTs : 0;
+    if (!duration) duration = videoGap || REC_FRAME_PERIOD_MICROS;
     run.lastVideoTs = rebased;
-    run.lastVideoDuration = chunk.duration || 0;
+    run.lastVideoDuration = duration;
   } else {
     // Audio chunks are independently decodable, so a stale one is simply
     // dropped; there is no reference chain to break.
     if (rebased <= run.lastAudioTs) return;
+    if (!duration) duration = 20000;
     run.lastAudioTs = rebased;
-    run.lastAudioDuration = chunk.duration || 0;
+    run.lastAudioDuration = duration;
   }
   run.written += chunk.byteLength || 0;
+  var sample = duration === chunk.duration ? chunk : withDuration(chunk, duration);
   try {
-    if (isVideo) run.muxer.addVideoChunk(chunk, meta, rebased);
+    if (isVideo) run.muxer.addVideoChunk(sample, meta, rebased);
     // The audio description is ours for AAC (run.audioMeta) and the encoder's
     // own for Opus, whose dOps box reads preskip and gain from it.
-    else run.muxer.addAudioChunk(chunk, run.audioMeta || meta, rebased);
-  } catch (err) { /* finalize raced the last chunk */ }
+    else run.muxer.addAudioChunk(sample, run.audioMeta || meta, rebased);
+    run.samplesWritten = (run.samplesWritten || 0) + 1;
+    if (isVideo) run.videoSamples = (run.videoSamples || 0) + 1;
+  } catch (err) {
+    if (!run.chunkWarned) {
+      run.chunkWarned = true;
+      toast('A frame could not be written: ' + ((err && err.message) || err), true);
+    }
+  }
+}
+
+/** A copy of an encoded chunk carrying a duration the muxer will accept.
+ *  `EncodedVideoChunk` is immutable, so the data is copied into a fresh chunk —
+ *  the same bytes, the same type, the same timestamp. */
+function withDuration(chunk, duration) {
+  try {
+    var data = new Uint8Array(chunk.byteLength);
+    chunk.copyTo(data);
+    var Ctor = chunk.type === 'key' || chunk.type === 'delta'
+      ? window.EncodedVideoChunk : window.EncodedAudioChunk;
+    return new Ctor({
+      type: chunk.type,
+      timestamp: chunk.timestamp,
+      duration: duration,
+      data: data
+    });
+  } catch (err) {
+    return chunk;
+  }
 }
 
 /* ------------------------------------------------------- capture and pumps
@@ -2628,6 +2953,11 @@ function pumpCapture(capture) {
         frame.close();
         return loop();
       }
+      // A capture that is delivering black frames (a protected/DRM surface,
+      // some GPU paths, a monitor showing a secure desktop) would otherwise
+      // record a black file with perfect audio and no hint why. Sample the
+      // first few frames and, if every one is black, say so plainly.
+      sampleBlackFrame(capture, frame);
       capture.frame = frame.timestamp;
       var at = frame.timestamp - (sinks[0].pausedMicros || 0);
       // Too close to the last painted frame: drop it rather than let a sink
@@ -2640,21 +2970,32 @@ function pumpCapture(capture) {
       try {
         capture.ctx.drawImage(frame, capture.dx, capture.dy, capture.drawWidth, capture.drawHeight);
       } catch (err) { /* frame closed */ }
+      // Judged *after* the paint: the canvas must already hold this frame for
+      // the snapshot to be meaningful.
+      verifyCanvasCopy(capture, frame);
       var rawTimestamp = frame.timestamp;
-      frame.close();
+      // Normally the encoders take the canvas, so both sinks get the same
+      // letterboxed picture. When the canvas snapshot proved black
+      // (verifyCanvasCopy) the captured frame itself is encoded instead —
+      // unscaled, but real — and the canvas is bypassed entirely.
+      var direct = capture.directFallback;
       sinks.forEach(function (run) {
         var keyFrame = run.lastKeyFrameTs < -1e15 || run.forceKeyFrame ||
           ((rawTimestamp - run.pausedMicros) - run.lastKeyFrameTs) >= REC_KEYFRAME_SECONDS * 1000000;
         if (keyFrame) run.lastKeyFrameTs = rawTimestamp - run.pausedMicros;
         run.forceKeyFrame = false;
         try {
-          var out = new VideoFrame(capture.canvas, { timestamp: rawTimestamp });
+          var out = direct
+            ? new VideoFrame(frame, { timestamp: rawTimestamp })
+            : new VideoFrame(capture.canvas, { timestamp: rawTimestamp });
           var opts = { keyFrame: keyFrame };
           // The stream encodes a smaller picture than the canvas holds, so the
           // encoder is told to scale; the frame is shared, so nothing is drawn
-          // twice.
-          if (run.outWidth && (run.outWidth !== capture.canvas.width ||
-              run.outHeight !== capture.canvas.height)) {
+          // twice. In the direct path the source is the capture's own size,
+          // so the same scaling still applies.
+          var srcW = direct ? out.displayWidth : capture.canvas.width;
+          var srcH = direct ? out.displayHeight : capture.canvas.height;
+          if (run.outWidth && (run.outWidth !== srcW || run.outHeight !== srcH)) {
             opts.scaledWidth = run.outWidth;
             opts.scaledHeight = run.outHeight;
           }
@@ -2662,10 +3003,99 @@ function pumpCapture(capture) {
           out.close();
         } catch (err) { /* encoder closed */ }
       });
+      // In direct mode the canvas is black, so the closing hold (holdLastFrame)
+      // needs the last real frame kept aside — one frame, replaced each time.
+      if (direct) {
+        if (capture.holdFrame) { try { capture.holdFrame.close(); } catch (e) {} }
+        try { capture.holdFrame = new VideoFrame(frame, { timestamp: rawTimestamp }); }
+        catch (e) { capture.holdFrame = null; }
+      }
+      frame.close();
       return loop();
     }).catch(function () { /* track ended or reader released */ });
   }
   return loop();
+}
+
+/** Proves once, on the first lit frame, that a `VideoFrame` taken from the 4K
+ *  canvas actually carries the picture that was just drawn onto it.
+ *
+ *  On some GPU/driver combinations a frame snapshotted from a hardware-backed
+ *  canvas is returned *black* even though the canvas is visibly correct — the
+ *  classic "recording is a black screen with audio" report. Nothing in the page
+ *  can prevent that, but it can be detected and routed around: from then on the
+ *  captured frame itself is handed to the encoders (scaled to the delivery
+ *  size) instead of the canvas. The letterbox is lost in that mode, which is a
+ *  far better outcome than a black file. */
+function verifyCanvasCopy(capture, frame) {
+  if (capture.canvasVerified || capture.directFallback) return;
+  try {
+    var probe = new VideoFrame(capture.canvas, { timestamp: frame.timestamp });
+    var bitmap = null;
+    // drawImage from the VideoFrame into the scratch canvas is the read-back
+    // that reveals whether the snapshot has content.
+    var scratch = capture.probeCanvas;
+    var sctx = capture.probeCtx;
+    if (!scratch) {
+      scratch = document.createElement('canvas');
+      scratch.width = 16; scratch.height = 16;
+      sctx = scratch.getContext('2d', { willReadFrequently: true });
+      capture.probeCanvas = scratch;
+      capture.probeCtx = sctx;
+    }
+    sctx.drawImage(probe, 0, 0, 16, 16);
+    probe.close();
+    var px = sctx.getImageData(0, 0, 16, 16).data;
+    var lit = 0;
+    for (var i = 0; i < px.length; i += 4) {
+      if (px[i] > 12 || px[i + 1] > 12 || px[i + 2] > 12) lit += 1;
+    }
+    // The source frame was already known to have content (sampleBlackFrame
+    // only lets us here once it has seen light), so an unlit canvas snapshot
+    // means the canvas path is broken.
+    if (lit < 8) {
+      capture.directFallback = true;
+      toast('Recording the captured frames directly — the screen could not be copied through the canvas.', true);
+      return;
+    }
+    capture.canvasVerified = true;
+  } catch (err) { /* no VideoFrame support for the probe: leave the canvas path */ }
+}
+
+/** Watches the first handful of captured frames. A screen share that is
+ *  delivering nothing but black is a specific, common failure — a protected
+ *  window, an HDCP surface, a monitor showing the lock screen — and the
+ *  recording it produces is audio with a black picture. Rather than let the
+ *  operator discover that after the service, sample a small patch of each of
+ *  the first few frames and tell them once, plainly, if it is all black. */
+function sampleBlackFrame(capture, frame) {
+  if (capture.blackChecked >= 30 || capture.blackWarned) return;
+  capture.blackChecked = (capture.blackChecked || 0) + 1;
+  try {
+    // A tiny scratch canvas: reading back from the 4K canvas on every frame
+    // would stall the pipeline, but a 16x16 sample is cheap and only runs for
+    // the opening second.
+    if (!capture.probeCanvas) {
+      capture.probeCanvas = document.createElement('canvas');
+      capture.probeCanvas.width = 16;
+      capture.probeCanvas.height = 16;
+      capture.probeCtx = capture.probeCanvas.getContext('2d', { willReadFrequently: true });
+    }
+    capture.probeCtx.drawImage(frame, 0, 0, 16, 16);
+    var px = capture.probeCtx.getImageData(0, 0, 16, 16).data;
+    var lit = 0;
+    for (var i = 0; i < px.length; i += 4) {
+      if (px[i] > 12 || px[i + 1] > 12 || px[i + 2] > 12) { lit += 1; }
+    }
+    capture.blackLit = (capture.blackLit || 0) + lit;
+    // Only judge after enough frames that a genuinely dark first frame (a
+    // fade-in) is not mistaken for a dead capture.
+    if (capture.blackChecked === 30 && capture.blackLit < 30) {
+      capture.blackWarned = true;
+      toast('The screen capture is coming through black. Share the display window or the whole screen — ' +
+        'a protected window or the lock screen cannot be captured.', true);
+    }
+  } catch (err) { /* a frame we cannot sample is simply not judged */ }
 }
 
 function pumpCaptureAudio(capture) {
@@ -2696,6 +3126,7 @@ function releaseCapture() {
   if (!shared) return;
   var capture = shared;
   shared = null;
+  if (capture.holdFrame) { try { capture.holdFrame.close(); } catch (e) {} capture.holdFrame = null; }
   if (capture.videoReader) { try { capture.videoReader.cancel(); } catch (e) {} }
   if (capture.audioReader) { try { capture.audioReader.cancel(); } catch (e) {} }
   if (capture.stream) capture.stream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) {} });
@@ -2761,13 +3192,16 @@ function holdLastFrame(run) {
       try {
         // onChunk will subtract the pause offset, so add it back here: the
         // hold is a position in file time, and that is what must survive.
-        var out = new VideoFrame(run.compositor.canvas, {
+        var source = (shared && shared.directFallback && shared.holdFrame)
+          ? shared.holdFrame : run.compositor.canvas;
+        var out = new VideoFrame(source, {
           timestamp: run.lastVideoTs + run.pausedMicros + (run.lastVideoDuration || 33333),
           duration: Math.round(holdMs * 1000)
         });
         var opts = { keyFrame: false };
-        if (run.outWidth && (run.outWidth !== run.compositor.canvas.width ||
-            run.outHeight !== run.compositor.canvas.height)) {
+        var srcW = source.displayWidth || source.width;
+        var srcH = source.displayHeight || source.height;
+        if (run.outWidth && (run.outWidth !== srcW || run.outHeight !== srcH)) {
           opts.scaledWidth = run.outWidth;
           opts.scaledHeight = run.outHeight;
         }
@@ -3103,11 +3537,14 @@ function openStreamSocket(run, url, audioCodec) {
  *  pipe over HTTP/1.1, so the encoded video travels in binary frames and the
  *  server unwraps them into ffmpeg. */
 function createStreamUpload(run, url, audioCodec) {
+  run.streamUrl = url;
   var ws = new WebSocket(streamSocketUrl());
   ws.binaryType = 'arraybuffer';
   run.ws = ws;
   run.queued = [];
   run.queuedBytes = 0;
+  run.bitrateStep = 0;
+  run.reconnectAttempts = 0;
 
   var settled = false;
   var ready = new Promise(function (resolve, reject) {
@@ -3133,16 +3570,25 @@ function createStreamUpload(run, url, audioCodec) {
       reject(new Error('The relay refused the stream.'));
     };
     ws.onclose = function () {
-      if (settled) return;
-      settled = true;
-      // The server closed instead of saying "ready": read the reason from
-      // the status endpoint, which the relay sets before closing.
-      fetch(STREAM_STATUS_PATH, { cache: 'no-store' })
-        .then(function (r) { return r.json(); })
-        .then(function (status) {
-          reject(new Error(status.detail || 'The relay refused the stream.'));
-        })
-        .catch(function () { reject(new Error('The relay refused the stream.')); });
+      if (!settled) {
+        settled = true;
+        // The server closed instead of saying "ready": read the reason from
+        // the status endpoint, which the relay sets before closing.
+        fetch(STREAM_STATUS_PATH, { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (status) {
+            reject(new Error(status.detail || 'The relay refused the stream.'));
+          })
+          .catch(function () { reject(new Error('The relay refused the stream.')); });
+        return;
+      }
+      // A close *after* the stream was live is the uplink dropping, not a
+      // refusal: reopen it rather than leave the operator streaming into a
+      // socket that no longer exists.
+      if (run.ws === ws) {
+        run.ws = null;
+        if (!run.stopRequested) scheduleStreamReconnect(run);
+      }
     };
   });
 
@@ -3159,29 +3605,144 @@ function streamSocketUrl() {
 }
 
 /** The muxer's output hook. Bytes go straight to the socket once the relay has
- *  accepted it; before that they are queued, but only briefly.
+ *  accepted it; while it is closed (a dropped uplink, a relay restart) they are
+ *  queued and the socket is reopened.
  *
- *  If the socket's send buffer passes a few seconds of video, the church's
- *  uplink cannot keep up. Growing it without bound would trade a stutter for a
- *  heap blow-up and a stream that is minutes behind live, so the stream is
- *  ended with a plain reason instead. A stream that cannot keep up is better
- *  stopped than left to rot. */
+ *  A weak uplink is *shaped*, never fatal. If the socket's send buffer grows
+ *  past a couple of seconds of the current bitrate, the bitrate is stepped down
+ *  the ladder — the picture softens and the queue drains. Only when the buffer
+ *  passes the hard limit does the video input start being dropped (a live
+ *  stream must never fall minutes behind), and even then it recovers on its
+ *  own. This is the OBS/Wirecast model: adapt, do not abort. */
 function sendStreamBytes(run, data, position) {
   if (!run || run.stopRequested || run.finished) return;
   if (!socketOpen(run)) {
+    // Not a failure: the reconnect loop owns reopening. Hold the bytes in
+    // order, and cap the hold so a long outage cannot eat the heap.
     run.queued.push(data);
     run.queuedBytes += data.byteLength;
-    if (run.queuedBytes > STREAM_MAX_QUEUE_BYTES) {
-      sinkFailure(run, new Error('The uplink cannot keep up with the stream.'));
+    while (run.queuedBytes > STREAM_MAX_QUEUE_BYTES && run.queued.length > 1) {
+      run.queuedBytes -= run.queued.shift().byteLength;
     }
+    scheduleStreamReconnect(run);
     return;
   }
+  captureStreamInit(run, data, position);
   flushStreamQueue(run);
+  adaptStreamBitrate(run);
   if (run.ws.bufferedAmount > STREAM_MAX_QUEUE_BYTES) {
-    sinkFailure(run, new Error('The uplink cannot keep up with the stream.'));
+    // Drop this chunk rather than let the socket fall further behind live.
+    // The muxer's samples are independent enough that a missing fragment only
+    // costs a moment of picture, and the decoder resyncs at the next keyframe.
+    run.droppedBytes = (run.droppedBytes || 0) + data.byteLength;
     return;
   }
   writeStreamChunk(run, data);
+}
+
+/** The seconds of video sitting in the relay socket's send buffer at the
+ *  current bitrate — the one number that says whether the uplink is keeping
+ *  up. */
+function streamBufferSeconds(run) {
+  if (!socketOpen(run)) return 0;
+  var bytesPerSecond = (run.videoBps || STREAM_BITRATE_STEPS[0]) / 8;
+  return run.ws.bufferedAmount / bytesPerSecond;
+}
+
+/** Walks the bitrate ladder with the uplink: down when the send buffer grows,
+ *  back up when it stays clear. Reconfiguring a WebCodecs encoder at run time
+ *  is allowed and is what makes this possible without a restart. */
+function adaptStreamBitrate(run) {
+  if (run.sink !== 'stream' || !run.videoEncoder ||
+      run.videoEncoder.state !== 'configured' || !run.videoConfig) return;
+  var seconds = streamBufferSeconds(run);
+  var step = run.bitrateStep || 0;
+  var now = performance.now();
+
+  if (seconds > STREAM_ABR_SOFT_SECONDS && step < STREAM_BITRATE_STEPS.length - 1) {
+    // Only step down once a second or so, or a single burst would walk the
+    // ladder to the floor before the queue has had a chance to drain.
+    if (now - (run.lastBitrateChange || 0) < 1200) return;
+    step += 1;
+    run.lastBitrateChange = now;
+    run.lastClearAt = null;
+    applyStreamBitrate(run, step);
+    return;
+  }
+
+  if (seconds < STREAM_ABR_SOFT_SECONDS * 0.4 && step > 0) {
+    if (!run.lastClearAt) { run.lastClearAt = now; return; }
+    if (now - run.lastClearAt < STREAM_ABR_RECOVER_SECONDS * 1000) return;
+    step -= 1;
+    run.lastBitrateChange = now;
+    run.lastClearAt = null;
+    applyStreamBitrate(run, step);
+  }
+}
+
+function applyStreamBitrate(run, step) {
+  run.bitrateStep = step;
+  run.videoBps = STREAM_BITRATE_STEPS[step];
+  var config = Object.assign({}, run.videoConfig, { bitrate: run.videoBps });
+  run.videoConfig = config;
+  try { run.videoEncoder.configure(config); } catch (err) { /* encoder gone */ }
+}
+
+/** Reopens the relay socket after a drop, backing off between attempts. The
+ *  encoder and the muxer never stop, so the picture simply resumes when the
+ *  uplink comes back — no restart, no lost recording. */
+function scheduleStreamReconnect(run) {
+  if (!run || run.stopRequested || run.finished || run.reconnecting) return;
+  if ((run.reconnectAttempts || 0) >= STREAM_RECONNECT_ATTEMPTS) {
+    sinkFailure(run, new Error('The relay connection could not be restored.'));
+    return;
+  }
+  run.reconnecting = true;
+  var attempt = (run.reconnectAttempts || 0) + 1;
+  run.reconnectAttempts = attempt;
+  var delay = Math.min(STREAM_RECONNECT_MAX_MS, 500 * Math.pow(2, attempt - 1));
+  if (attempt === 1) toast('Stream connection dropped — reconnecting…', true);
+  setTimeout(function () {
+    if (!run || run.stopRequested || run.finished) return;
+    reopenStreamSocket(run).then(function () {
+      run.reconnecting = false;
+      run.reconnectAttempts = 0;
+      run.needInit = true;
+      run.forceKeyFrame = true;   // give the new ffmpeg a fresh keyframe at once
+      toast('Stream reconnected.');
+      flushStreamQueue(run);
+    }).catch(function () {
+      run.reconnecting = false;
+      scheduleStreamReconnect(run);
+    });
+  }, delay);
+}
+
+/** A fresh WebSocket to the same relay, with the same URL and audio codec.
+ *  The relay starts a new ffmpeg for it; YouTube treats it as the same stream
+ *  because the key is unchanged, so viewers see a short gap, not a new stream. */
+function reopenStreamSocket(run) {
+  return new Promise(function (resolve, reject) {
+    var ws;
+    try { ws = new WebSocket(streamSocketUrl()); }
+    catch (err) { reject(err); return; }
+    ws.binaryType = 'arraybuffer';
+    var settled = false;
+    ws.onopen = function () {
+      ws.send(JSON.stringify({ url: run.streamUrl, audio: run.audioHint || 'aac' }));
+    };
+    ws.onmessage = function (event) {
+      var hello = {};
+      try { hello = JSON.parse(event.data); } catch (e) {}
+      if (hello.state === 'ready' && !settled) {
+        settled = true;
+        run.ws = ws;
+        resolve();
+      }
+    };
+    ws.onerror = function () { if (!settled) { settled = true; reject(new Error('reconnect failed')); } };
+    ws.onclose = function () { if (!settled) { settled = true; reject(new Error('reconnect failed')); } };
+  });
 }
 
 /** Whether the relay socket is open and past the handshake. */
@@ -3194,15 +3755,40 @@ function flushStreamQueue(run) {
   var queued = run.queued;
   run.queued = [];
   run.queuedBytes = 0;
+  // A reconnected relay starts a brand-new ffmpeg reading a stream that is no
+  // longer at its beginning, so the init segment (ftyp + moov) has to be
+  // replayed first or the new process cannot parse a single sample.
+  if (run.needInit && run.initBytes && run.initBytes.length) {
+    run.needInit = false;
+    writeStreamChunk(run, run.initBytes);
+  }
   queued.forEach(function (data) { writeStreamChunk(run, data); });
+}
+
+/** Keeps a copy of the fragmented MP4's opening bytes — everything written
+ *  from position 0 until the cap. That is the ftyp/moov a fresh ffmpeg needs in
+ *  order to read the samples that follow it after a reconnect. */
+function captureStreamInit(run, data, position) {
+  if (run.initBytes && run.initBytes.length >= STREAM_INIT_CAP) return;
+  var have = run.initBytes ? run.initBytes.length : 0;
+  if (position !== have) return; // not contiguous with what we have
+  var room = STREAM_INIT_CAP - have;
+  var slice = data.byteLength > room ? data.subarray(0, room) : data;
+  var merged = new Uint8Array(have + slice.byteLength);
+  if (have) merged.set(run.initBytes, 0);
+  merged.set(slice, have);
+  run.initBytes = merged;
 }
 
 function writeStreamChunk(run, data) {
   try {
     run.ws.send(data);
   } catch (err) {
-    // The reader is gone: the relay died. Nothing more can be sent.
-    if (!run.stopRequested) sinkFailure(run, new Error('The relay stopped reading the stream.'));
+    // The socket went away under us. Do not end the stream for it — close the
+    // dead socket and let the reconnect loop open a fresh one; the queued
+    // bytes follow when it is ready.
+    run.ws = null;
+    if (!run.stopRequested) scheduleStreamReconnect(run);
   }
 }
 
@@ -3225,7 +3811,9 @@ function setLiveButton(state) {
   if (state === 'connecting') {
     el.liveBtnLabel.textContent = 'Connecting…';
   } else if (state === 'live') {
-    el.liveBtnLabel.textContent = '0:00';
+    // Keep the time on air if the ticker is already running; a reconnect must
+    // not reset it to zero.
+    if (!air || !air.tick) el.liveBtnLabel.textContent = '0:00';
   } else {
     el.liveBtnLabel.textContent = 'Go Live';
   }
@@ -3299,10 +3887,11 @@ window.addEventListener('beforeunload', function () {
     var tag = document.activeElement && document.activeElement.tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
 
-    if (e.key === 'ArrowLeft' && preview.mode === 'scripture') { e.preventDefault(); stepScripture(-1); }
-    else if (e.key === 'ArrowRight' && preview.mode === 'scripture') { e.preventDefault(); stepScripture(1); }
-    else if (e.key === 'ArrowUp' && preview.mode === 'lyrics') { e.preventDefault(); stepLyric(-1); }
-    else if (e.key === 'ArrowDown' && preview.mode === 'lyrics') { e.preventDefault(); stepLyric(1); }
+    var family = modeFamily(preview.mode);
+    if (e.key === 'ArrowLeft' && family === 'scripture') { e.preventDefault(); stepScripture(-1); }
+    else if (e.key === 'ArrowRight' && family === 'scripture') { e.preventDefault(); stepScripture(1); }
+    else if (e.key === 'ArrowUp' && family === 'lyrics') { e.preventDefault(); stepLyric(-1); }
+    else if (e.key === 'ArrowDown' && family === 'lyrics') { e.preventDefault(); stepLyric(1); }
     else if (e.key === ' ') { e.preventDefault(); pushLive(false); }
   });
 
@@ -3340,6 +3929,11 @@ window.addEventListener('beforeunload', function () {
     // operator switches to Camera. Permission is only requested when they
     // actually open that panel (setMode), not on every console load.
     refreshCameras();
+
+    // Audio inputs (microphone, a DroidCam phone, a desk on the line-in jack)
+    // and the remembered line-in switch.
+    setAudioLineIn(!!preview.audioLineIn);
+    refreshAudioInputs();
 
     // Paint the iframe. It may already be loaded when this runs (cache), in
     // which case the `load` event will never fire again.

@@ -64,7 +64,7 @@ Only the chosen mode's own fields are shown: `#mode-fields` holds one
 the operator sees one mode's controls rather than every control at once.
 
 The picker is **not in the rail**. It is a full-width `.console__modes` bar
-along the bottom edge of the window, a sibling of the rail/preview row. Seven
+along the bottom edge of the window, a sibling of the rail/preview row. The
 labels cannot share one line inside the narrow rail, and pinning them to the
 top of the rail (the old `position:sticky`) ate height the controls needed.
 As a bottom bar they sit on one line, always visible, whatever the rail is
@@ -76,6 +76,7 @@ scrolled to.
 | Text | `#text-view` ŌĆö a typed quote, dressed like scripture |
 | Media | `#media-view` ŌĆö a photo, video, GIF, audio file, or a YouTube embed |
 | Camera | `#camera-view` ŌĆö the display device's own live feed |
+| Scripture + Cam / Lyrics + Cam | `#duo-view` ŌĆö the same verse or hymn in a band over that live feed |
 | Webpage | `#webpage-view` ŌĆö an external page framed by the panel (`#webpage-frame`) |
 | No Panel (`#no-panel-toggle`) | the glass is removed; background alone (body gets `.no-panel`) |
 
@@ -97,6 +98,29 @@ is gone (`OverconstrainedError`). Changing the camera is live while the feed is
 on screen; the display reopens only when the device changes, never on a silent
 re-push. `cameraDeviceId` also rides on every `push`, so a display reload
 reopens the right camera.
+
+**The combined panels.** `scripture-camera` and `lyrics-camera` are modes like
+any other: the mode picker gains two entries, `setMode()` shows the verse (or
+lyric) controls *and* the camera picker together, and `#duo-view` renders on the
+display. Nothing is shared with the standalone panels at runtime — `duo-view` is
+its own section with its own `<video id="duo-camera-video">`, its own
+`#duo-scripture` / `#duo-lyrics` blocks and its own `#duo-lyrics-track`, so the
+standalone scripture, lyrics and camera modes keep working exactly as before and
+the two never fight over one element. The camera stream is opened by the display
+for whichever mode is up (`modeUsesCamera()` is true for all three camera modes)
+and closed when the mode leaves, so the camera light goes off with the panel.
+
+The words sit in a band (`.duo-panel__text`) pinned across the bottom of a
+full-bleed camera picture, capped at 46% of the panel so it can never swallow
+the preacher's face, on a translucent plate rather than a gradient fade — a fade
+leaves the last line unreadable over a bright shirt, and legibility is the whole
+point of the mode. The band has a bounded height for the same reason the
+standalone scripture panel does: `fitDuoScripture()` binary-searches the type
+against the band's content box, and a band that grew with its content would have
+nothing to fit against. The lyric track is scrolled by the same
+`focusLyricTrack()` as the standalone one, and stepping a verse or a line is the
+same live exemption as everywhere else — a step on a preview that *is* the live
+view moves the screen, a new book or song still waits for Launch.
 
 Text and media are *modes*, not a separate foreground layer: they render inside
 the same glass panel, so nothing competes with the background. The panel only
@@ -197,6 +221,24 @@ own sound: `buildAudioMix` sums the captured audio with the microphone
 (`getUserMedia`, gained up) through one Web Audio graph, so the room's sound and
 the preacher's voice are both in the file and losing either one does not lose the
 recording.
+
+**Which input, and how it is opened.** The audio input is a choice, because a
+phone running DroidCam and a mixing desk on the line-in jack are both just
+`audioinput` devices: `#audio-device-select` lists them (real names appear after
+`primeAudioNames` asks once), and `audioDeviceId` rides on every `push` and in
+the persisted settings. `audioConstraints(deviceId, lineIn)` is the one place
+the shape of the request is decided. A microphone keeps the voice processing on
+(`echoCancellation`/`noiseSuppression`/`autoGainControl`); `#audio-linein-toggle`
+turns all three off, because a desk feeding music does not want the browser
+ducking it every time the room speaks or compressing the quiet passages. A
+chosen device that has gone (a phone off the Wi-Fi, a desk unplugged) is the
+everyday case, so `requestMic()` retries once with the default input rather than
+costing the recording its microphone — and it says so through a toast, because
+a silent file made by a fallen-back mic is worse than an obvious one. Everything
+that opens the mic goes through `requestMic()` (the mix and the level check
+alike), so the fallback cannot exist in one path and not the other.
+`#audio-test-btn` is the operator's proof before a service: it opens that input,
+moves a meter for ~2.4s and reports whether sound actually arrived.
 
 Two traps make a file that carries an audio track and still plays as silence.
 Both bite the real-world case — a screen shared over HDMI, where the share
@@ -353,6 +395,32 @@ The transport matches the recording's: the live button shows the time on air
 — there is no Pause, because a live stream cannot be paused. Both the button and
 the Stop hide the moment the relay ends.
 
+**A weak uplink adapts; it never ends the stream.** This is the OBS/Wirecast
+model, and it is the whole difference between a stream that survives a church
+network and one that dies at the first hiccup. Three layers, in order:
+
+1. **Bitrate ladder** (`STREAM_BITRATE_STEPS`, 12 → 8 → 5 → 3.2 Mbps).
+   `streamBufferSeconds()` reads the relay socket's own `bufferedAmount` in
+   seconds of video at the current bitrate — the one number that says whether
+   the uplink is keeping up. Past `STREAM_ABR_SOFT_SECONDS` the step goes down;
+   held under 40% of it for `STREAM_ABR_RECOVER_SECONDS` the step goes back up.
+   Reconfiguring a running `VideoEncoder` with a new `bitrate` is allowed by
+   WebCodecs, which is what makes this possible with no restart. Steps are
+   spaced (`lastBitrateChange`) so one burst cannot walk the ladder to the floor
+   before the queue has had a chance to drain.
+2. **Frame dropping** past `STREAM_MAX_QUEUE_BYTES`. A live stream must never
+   fall minutes behind; a missing fragment costs a moment of picture and the
+   decoder resyncs at the next keyframe.
+3. **Socket reconnect** (`scheduleStreamReconnect`, exponential backoff to
+   `STREAM_RECONNECT_MAX_MS`). The encoder and muxer never stop, so the picture
+   simply resumes when the uplink returns — no restart, no lost recording — and
+   `run.needInit`/`forceKeyFrame` give the new ffmpeg a fresh keyframe at once.
+   The time on air does **not** reset, because the broadcast did not end.
+
+`startLiveWatch()` polls `/stream/status` while on air. A relay that has stopped
+is not fatal on its own: the socket layer is already reopening it, and only a
+sustained outage (45s) or exhausted reconnect attempts ends the stream.
+
 ## File map
 
 | File | Notes |
@@ -407,6 +475,20 @@ the Stop hide the moment the relay ends.
 - **The lyric track rebuilds on title *and* lines, not the title alone.** An
   edited song keeps its title but rewrites its lines, so keying the rebuild on
   the title left the old words on screen after an edit.
+- **The combined panels own their own elements.** `#duo-view` has its own
+  `#duo-camera-video`, `#duo-scripture` and `#duo-lyrics-track`; reusing the
+  standalone ones would make a switch between modes fight over `srcObject` and
+  the lyric track, and the standalone modes must keep working untouched.
+  `modeUsesCamera()` is what opens *and* closes the feed — a mode that leaves
+  without closing it leaves the camera light on for the rest of the service.
+- **The duo text band needs a bounded height to be fitted.** `fitDuoScripture()`
+  binary-searches against `#duo-text-slot`'s content box; a band that grew with
+  its content would have nothing to measure against, exactly like the standalone
+  scripture panel's `max-height:88%`.
+- **Every path that opens the microphone must go through `requestMic()`.** The
+  level check used to call `getUserMedia` itself, so it failed on a device that
+  had gone while the recording fell back correctly — the operator would be told
+  the input was broken when it was fine.
 - **`applyMode()` must be idempotent.** It runs on every push, and a step
   re-pushes the state; remounting the media on each one would restart a
   playing video. It keys on the media descriptor and only rebuilds when that
@@ -455,9 +537,11 @@ the Stop hide the moment the relay ends.
   `datetime-local` input has an intrinsic width it will not go below, so
   without `flex-wrap` plus `min-width:0` on the fields it spills out of the
   rail on a narrower window.
-- **The bottom picker scales its labels instead of clipping them.** Seven
-  names share one line in `.console__modes`; `white-space:nowrap` alone
-  truncates them at ~900px, so the font size is clamped to the viewport width.
+- **The bottom picker scales its labels instead of clipping them.** Ten names
+  share one line in `.console__modes`; `white-space:nowrap` alone truncates
+  them, so the font size is clamped to the viewport width — and the two
+  combined modes made the strip tight enough that `Countdown timer` and
+  `Analog clock` had to become `Timer` and `Clock` to keep the rest legible.
 - **A lone synthetic `node.click()` does not drive a real page.** The preview
   relay must send the whole pointer sequence and the display must re-dispatch
   real `PointerEvent`/`MouseEvent` pairs; menus open on `pointerdown`, drag
@@ -524,6 +608,14 @@ the Stop hide the moment the relay ends.
   ŌĆö the monotonic guard then drops it and the decoder reports "reference picture
   missing during reorder". Resume must also await the pause flush before moving
   the offset, or the same thing happens without a dropped frame being involved.
+- **A video chunk with no `duration` is silently dropped by mp4-muxer.**
+  `addVideoChunk` requires a non-negative real duration; a WebCodecs chunk
+  often carries `null`, the throw was swallowed by `onChunk`, *every* video
+  sample was lost, and the file came out with a perfect audio track and a black
+  screen — the shipped "black screen with audio" report. `onChunk` now supplies
+  `REC_FRAME_PERIOD_MICROS` (`floor(1e6 / REC_FRAME_RATE)`) when the chunk has
+  none. The suite measures real frame luminance with `signalstats` for this
+  reason: an audio track that exists is not a picture.
 - **Frames closer together than one frame period must be dropped.** The muxer
   times the video track in units of `REC_FRAME_RATE` (`57600` for 30fps), so two
   frames inside one unit get the same decode timestamp and the file is invalid.
@@ -563,6 +655,7 @@ python3 tests/test_console_display.py   # the console/display split
 python3 tests/test_persistence.py       # backdrop + song persistence
 python3 tests/test_display_features.py  # type sizes + the panel modes
 python3 tests/test_ai_and_embeds.py     # AI, YouTube and the webpage panel
+python3 tests/test_audio_input.py       # the audio input picker and the fallback
 python3 tests/test_recording_and_interactive.py  # recording + preview control
 python3 tests/test_streaming.py         # Go Live relay (against a local RTMP server)
 python3 tests/test_aac_muxing.py        # AAC recording path (node + ffmpeg, no browser)
@@ -580,6 +673,20 @@ the enlarged lyrics/scripture/clock/timer type, scripture/text never spilling
 off the stage, per-mode control visibility, the camera picker (single camera
 auto-selected, several cameras offered, the chosen id sent to the display), and
 every panel mode (media, camera, text, No Panel, plus editing a song's lyrics).
+
+`test_display_features.py` also covers the two combined panels: the picker shows
+the verse (or lyric) controls *and* the camera picker together, `#duo-view`
+appears with the words in a band over a live camera, the band never takes more
+than half the picture, the longest verse in the KJV fits it with its reference
+and the fitter shrinks the type to make that happen, the lyric track is built and
+marks the current line, a lyric step moves the combined panel without a launch,
+and leaving the mode stops its camera.
+
+`test_audio_input.py` covers the input picker: it lists the devices, the level
+check opens the chosen input and reports what it heard, a line-in is opened with
+echo cancellation, noise suppression and auto-gain all off, that choice survives
+a reload, and a device that has gone falls back to the default input instead of
+failing (the everyday case for a phone running DroidCam).
 
 `test_ai_and_embeds.py` stubs the Gemini endpoint with `page.route()` (so the
 real request/response handling runs with no key or network) and checks the
@@ -619,7 +726,11 @@ invisible on Linux CI, where every track tells the truth.
 
 `test_streaming.py` stands a real RTMP server in ffmpeg's `-listen 1` mode where
 YouTube would be, and drives the console into it with nothing stubbed but the
-screen picker. It checks the transport (Go Live shows the time on air and a
+screen picker. It also covers a weak uplink — a fake `bufferedAmount` that
+stands in for a congested link steps the bitrate down the ladder while the
+stream stays on air, then climbs back when the link recovers — and a dropped
+relay socket, which must be reopened with the time on air intact rather than
+ending the broadcast. It checks the transport (Go Live shows the time on air and a
 single icon-only Stop, never a Pause), the relay's states (idle → live →
 stopped), that a recording and a stream share one capture, and then inspects
 what the RTMP server actually received: an H.264 picture at **1920×1080**, AAC

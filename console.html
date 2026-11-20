@@ -85,6 +85,35 @@
         </div>
       </details>
 
+      <!-- Audio in. What the recording and the stream carry is the screen's
+           own sound summed with one chosen input: the laptop microphone by
+           default, a phone acting as a wireless mic (DroidCam Audio and its
+           kin appear here as an ordinary audio input), or a mixing desk fed
+           into the line-in jack. A desk's output is already mixed and
+           compressed, so the browser's echo cancellation, noise suppression
+           and auto-gain would fight it — the Line-in switch turns all three
+           off for it. -->
+      <details class="ai-setup" id="audio-setup">
+        <summary>Audio input</summary>
+        <div class="field" style="margin-top:.6rem;">
+          <label for="audio-device-select">Microphone / line-in</label>
+          <select id="audio-device-select">
+            <option value="">Default input</option>
+          </select>
+          <p class="hint" id="audio-device-hint">Recording and streaming mix the screen's own sound with this input.</p>
+        </div>
+        <div class="field" style="margin-top:.7rem;">
+          <button type="button" id="audio-linein-toggle" class="switch" role="switch" aria-checked="false">
+            <span class="switch__track"><span class="switch__thumb"></span></span>
+            <span class="switch__label">Line-in / mixer (no processing)</span>
+          </button>
+        </div>
+        <div class="field" style="margin-top:.7rem;">
+          <button class="btn" id="audio-test-btn">Check input level</button>
+          <div class="level-meter" id="audio-level-meter" hidden><span></span></div>
+        </div>
+      </details>
+
       <!-- Go Live settings. The stream key is a secret and stays in this
            browser's localStorage; it is sent only to the RTMP server the
            operator names. -->
@@ -322,14 +351,16 @@
        never scrolls away and never steals height from the controls. -->
   <footer class="console__modes">
     <div class="segmented" id="mode-toggle-group" role="group">
-      <button type="button" data-mode="timer" class="active">Countdown timer</button>
-      <button type="button" data-mode="clock">Analog clock</button>
+      <button type="button" data-mode="timer" class="active">Timer</button>
+      <button type="button" data-mode="clock">Clock</button>
       <button type="button" data-mode="scripture">Scripture</button>
       <button type="button" data-mode="lyrics">Lyrics</button>
       <button type="button" data-mode="text">Text</button>
       <button type="button" data-mode="media">Media</button>
       <button type="button" data-mode="camera">Camera</button>
       <button type="button" data-mode="webpage">Webpage</button>
+      <button type="button" data-mode="scripture-camera">Scripture + Cam</button>
+      <button type="button" data-mode="lyrics-camera">Lyrics + Cam</button>
     </div>
   </footer>
 

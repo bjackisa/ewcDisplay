@@ -96,6 +96,30 @@ body{ cursor:none; }
       <p class="webpage-status" id="webpage-status" hidden></p>
     </section>
 
+    <!-- Scripture/lyrics beside the live camera: the camera fills the glass
+         and the words sit in a translucent band across the bottom, the way a
+         broadcast lower-third works. Its own nodes (not the standalone
+         panels') so the standalone views keep working untouched; display.js
+         renders both from the same state with the same helpers. -->
+    <section id="duo-view" class="panel duo-panel">
+      <div class="duo-panel__media">
+        <video id="duo-camera-video" autoplay muted playsinline class="is-mirrored"></video>
+        <p class="camera-status" id="duo-camera-status" hidden></p>
+      </div>
+      <div class="duo-panel__text" id="duo-text-slot">
+        <div class="duo-scripture" id="duo-scripture" hidden>
+          <p class="scripture-text" id="duo-scripture-text"></p>
+          <p class="scripture-reference" id="duo-scripture-reference"></p>
+        </div>
+        <div class="duo-lyrics" id="duo-lyrics" hidden>
+          <p class="lyrics-title" id="duo-lyrics-title"></p>
+          <div class="lyrics-scrollport" id="duo-lyrics-scrollport">
+            <div class="lyrics-track" id="duo-lyrics-track"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
   </main>
 
   <p class="micro-time" id="micro-time"></p>

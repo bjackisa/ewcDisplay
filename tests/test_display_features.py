@@ -84,11 +84,15 @@ def main():
                 return con.evaluate(
                     "Array.from(document.querySelectorAll('#mode-fields > div'))"
                     ".filter(function(d){return !d.hidden}).map(function(d){return d.id})")
-            for mode in ["timer", "clock", "scripture", "lyrics", "text", "media", "camera"]:
+            for mode in ["timer", "clock", "scripture", "lyrics", "text", "media",
+                         "camera", "scripture-camera", "lyrics-camera"]:
                 con.click('button[data-mode="%s"]' % mode)
                 con.wait_for_timeout(250)
+                expected = {"scripture-camera": ["scripture-fields", "camera-fields"],
+                            "lyrics-camera": ["lyrics-fields", "camera-fields"]}.get(
+                                mode, ["%s-fields" % mode])
                 check("only the %s controls are shown" % mode,
-                      visible_groups() == ["%s-fields" % mode], str(visible_groups()))
+                      visible_groups() == expected, str(visible_groups()))
             con.click("#no-panel-toggle")
             con.wait_for_timeout(250)
             check("No Panel hides the mode controls",
@@ -230,6 +234,132 @@ def main():
             con.wait_for_timeout(1200)
             check("leaving the camera stops the stream",
                   disp.evaluate("!document.getElementById('camera-video').srcObject"))
+
+            # ---- the combined panels: the words over the preacher -----------
+            # Scripture + Cam and Lyrics + Cam are their own modes: the same
+            # verse or hymn, in a band over the camera feed. They do not
+            # replace the standalone panels, which keep working as before.
+            con.click('button[data-mode="scripture"]')
+            con.select_option("#scripture-book-select", "43")   # John
+            con.fill("#scripture-chapter-input", "3")
+            con.fill("#scripture-verse-input", "16")
+            con.click("#scripture-go-btn")
+            con.wait_for_timeout(400)
+            con.click('button[data-mode="scripture-camera"]')
+            con.wait_for_timeout(400)
+            check("Scripture + Cam shows the verse controls and the camera picker",
+                  con.evaluate("Array.from(document.querySelectorAll('#mode-fields > div'))"
+                               ".filter(function(d){return !d.hidden}).map(function(d){return d.id})")
+                  == ["scripture-fields", "camera-fields"])
+            con.click("#launch-btn")
+            con.wait_for_timeout(2500)
+            duo = disp.evaluate("""(function(){
+              var panel = document.getElementById('duo-view');
+              var band = document.getElementById('duo-text-slot');
+              var stage = document.getElementById('stage');
+              var pr = panel.getBoundingClientRect(), br = band.getBoundingClientRect();
+              var sr = stage.getBoundingClientRect();
+              return { shown: getComputedStyle(panel).display !== 'none',
+                       scripture: !document.getElementById('duo-scripture').hidden,
+                       text: document.getElementById('duo-scripture-text').textContent.trim(),
+                       camera: !!document.getElementById('duo-camera-video').srcObject,
+                       insideStage: pr.left >= sr.left - 1 && pr.right <= sr.right + 1
+                                 && pr.top >= sr.top - 1 && pr.bottom <= sr.bottom + 1,
+                       bandShare: br.height / pr.height };
+            })()""")
+            check("Scripture + Cam puts the panel on screen", duo["shown"], duo)
+            check("Scripture + Cam shows the verse", len(duo["text"]) > 20, duo["text"][:50])
+            check("Scripture + Cam runs the camera behind it", duo["camera"], duo)
+            check("the combined panel stays inside the 16:9 stage", duo["insideStage"], duo)
+            check("the words never swallow more than half the picture",
+                  duo["bandShare"] <= 0.47, round(duo["bandShare"], 3))
+            check("the standalone scripture panel is not also up",
+                  disp.evaluate("getComputedStyle(document.getElementById('scripture-view')).display") == "none")
+
+            # The longest verse in the KJV must still fit the band, with its
+            # reference, or the mode is useless exactly when it is needed.
+            con.click('button[data-mode="scripture"]')
+            con.select_option("#scripture-book-select", "17")   # Esther
+            con.fill("#scripture-chapter-input", "8")
+            con.fill("#scripture-verse-input", "9")
+            con.click("#scripture-go-btn")
+            con.wait_for_timeout(600)
+            con.click('button[data-mode="scripture-camera"]')
+            con.wait_for_timeout(400)
+            con.click("#launch-btn")
+            con.wait_for_timeout(2000)
+            long_fit = disp.evaluate("""(function(){
+              var band = document.getElementById('duo-text-slot').getBoundingClientRect();
+              var text = document.getElementById('duo-scripture-text').getBoundingClientRect();
+              var ref = document.getElementById('duo-scripture-reference').getBoundingClientRect();
+              return { textFits: text.bottom <= band.bottom + 1,
+                       refFits: ref.bottom <= band.bottom + 1,
+                       fontSize: parseFloat(getComputedStyle(
+                         document.getElementById('duo-scripture-text')).fontSize) };
+            })()""")
+            check("the longest verse fits the combined band", long_fit["textFits"], long_fit)
+            check("its reference stays on screen too", long_fit["refFits"], long_fit)
+            check("the fitter shrank the type to make it fit",
+                  long_fit["fontSize"] < 51.2, long_fit["fontSize"])
+
+            # Lyrics + Cam: the hymn in the band, the same live stepping.
+            con.click('button[data-mode="lyrics"]')
+            con.fill("#song-title-input", "Amazing Grace")
+            con.fill("#song-lyrics-input",
+                     "\n".join("Line %d of the hymn we sing" % i for i in range(1, 13)))
+            con.click("#song-save-btn")
+            con.wait_for_timeout(400)
+            items = con.query_selector_all("#song-list button")
+            if items:
+                items[0].click(force=True)
+            con.wait_for_timeout(400)
+            con.click('button[data-mode="lyrics-camera"]')
+            con.wait_for_timeout(400)
+            con.click("#launch-btn")
+            con.wait_for_timeout(2500)
+            duol = disp.evaluate("""(function(){
+              var rows = document.querySelectorAll('#duo-lyrics-track .lyric-line');
+              var sp = document.getElementById('duo-lyrics-scrollport').getBoundingClientRect();
+              var band = document.getElementById('duo-text-slot').getBoundingClientRect();
+              var active = document.querySelector('#duo-lyrics-track .lyric-line.is-active');
+              return { shown: !document.getElementById('duo-lyrics').hidden,
+                       rows: rows.length, active: active ? active.textContent : null,
+                       fits: sp.bottom <= band.bottom + 1,
+                       camera: !!document.getElementById('duo-camera-video').srcObject };
+            })()""")
+            check("Lyrics + Cam shows the hymn", duol["shown"] and duol["rows"] == 12, duol)
+            check("Lyrics + Cam marks the current line", bool(duol["active"]), duol["active"])
+            check("the lyric block stays inside the band", duol["fits"], duol)
+            check("Lyrics + Cam runs the camera behind it", duol["camera"], duol)
+            con.bring_to_front()
+            con.evaluate("document.body.focus()")
+            before_line = duol["active"]
+            con.keyboard.press("ArrowDown")
+            con.wait_for_timeout(800)
+            check("stepping a line moves the combined panel without a launch",
+                  disp.evaluate("document.querySelector('#duo-lyrics-track .lyric-line.is-active')"
+                                ".textContent") != before_line
+                  and con.inner_text("#preview-note").strip() == "Live")
+
+            # Leaving the combined mode must stop the camera, or the light
+            # stays on after the service.
+            con.click('button[data-mode="timer"]')
+            con.click("#launch-btn")
+            con.wait_for_timeout(1500)
+            check("leaving a combined mode stops its camera",
+                  disp.evaluate("!document.getElementById('duo-camera-video').srcObject"))
+            check("the standalone lyrics panel still works on its own",
+                  disp.evaluate("getComputedStyle(document.getElementById('duo-view')).display") == "none")
+            # Remove the song this section added, so the later editing checks
+            # still find the library they expect.
+            con.bring_to_front()
+            con.evaluate("""() => {
+              const rows = Array.from(document.querySelectorAll('#song-list .song-item'));
+              const row = rows.find(r => r.textContent.indexOf('Amazing Grace') !== -1);
+              const del = row && row.querySelector('.song-delete');
+              if (del) del.click();
+            }""")
+            con.wait_for_timeout(500)
 
             # ---- camera picker with several cameras --------------------------
             # The fake device only offers one camera, so stub enumerateDevices

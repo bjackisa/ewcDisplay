@@ -508,6 +508,122 @@ button, input{ font-family:inherit; }
 }
 .text-title[hidden]{ display:none; }
 
+/* ==========================================================================
+   5c. DUO PANEL — scripture or lyrics over the live camera
+   One glass panel that carries two things at once: the camera fills it, and
+   the words sit in a band across the bottom. The standalone scripture,
+   lyrics and camera panels are untouched; this is a fourth way to show the
+   same content, for the moments when the congregation should see the
+   preacher and read along.
+
+   The band is a solid-enough translucent plate rather than a gradient fade:
+   a fade would leave the last line unreadable over a bright shirt, and the
+   whole point of the mode is legibility.
+   ========================================================================== */
+#duo-view{ display:none; }
+
+.duo-panel{
+  position:relative;
+  width:min(94vw, 92rem);
+  max-width:97%;
+  height:min(88vh, 56rem);
+  max-height:93%;
+  /* No padding: the camera runs to the glass edge and the words sit inside
+     it, so the panel reads as a screen rather than a card holding a screen. */
+  padding:0;
+  overflow:hidden;
+}
+
+.duo-panel__media{
+  position:absolute;
+  inset:0;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:#05080f;
+}
+
+#duo-camera-video{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  display:block;
+}
+
+.duo-panel__media .camera-status{
+  position:absolute;
+  inset:auto 0 50% 0;
+  text-align:center;
+}
+
+/* The words. A band across the bottom, capped so it can never swallow the
+   face above it; display.js shrinks the type to fit what is left. */
+.duo-panel__text{
+  position:absolute;
+  left:0; right:0; bottom:0;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:clamp(.3rem, .8vh, .8rem);
+  max-height:46%;
+  padding:clamp(1rem, 2.6vh, 2.2rem) clamp(1.4rem, 4vw, 4rem);
+  background:linear-gradient(180deg, rgba(4,7,18,.55), rgba(4,7,18,.86));
+  backdrop-filter:blur(14px) saturate(140%);
+  -webkit-backdrop-filter:blur(14px) saturate(140%);
+  border-top:1px solid rgba(255,255,255,.14);
+  overflow:hidden;
+}
+
+.duo-panel__text > div{ width:100%; }
+
+.duo-scripture{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:clamp(.3rem, .9vh, .9rem);
+}
+.duo-scripture[hidden]{ display:none; }
+
+/* Smaller than the standalone verse: this shares the frame with a face, and
+   the band caps its own height. The fitter still runs on top of this. */
+.duo-scripture .scripture-text{
+  font-size:clamp(1.5rem, 3vw, 3.2rem);
+  line-height:1.22;
+  max-width:min(88vw, 62rem);
+  max-height:none;
+}
+.duo-scripture .scripture-reference{
+  font-size:clamp(1rem, 1.6vw, 1.7rem);
+}
+
+.duo-lyrics{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:clamp(.2rem, .6vh, .6rem);
+}
+.duo-lyrics[hidden]{ display:none; }
+
+.duo-lyrics .lyrics-title{
+  font-size:clamp(.85rem, 1.5vw, 1.5rem);
+  letter-spacing:.12em;
+}
+
+.duo-lyrics .lyrics-scrollport{
+  height:clamp(4.4rem, 15vh, 10rem);
+  width:100%;
+}
+.duo-lyrics .lyric-line{
+  font-size:clamp(1.4rem, 2.8vw, 2.9rem);
+  min-height:clamp(2.4rem, 6.4vh, 4.4rem);
+  line-height:1.16;
+}
+.duo-lyrics .lyrics-scrollport.is-tight .lyric-line{
+  font-size:clamp(1.1rem, 2vw, 2.1rem);
+  min-height:clamp(1.9rem, 4.6vh, 3.2rem);
+}
+
 /* -- Media and camera: the panel grows so a photo or video reads big. It stays
       comfortably inside the 16:9 stage (88vw × 84vh) so it can never spill. */
 .media-panel, .camera-panel{

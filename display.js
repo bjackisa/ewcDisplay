@@ -68,6 +68,18 @@
     webpageFrame: document.getElementById('webpage-frame'),
     webpageStatus: document.getElementById('webpage-status'),
 
+    duoView: document.getElementById('duo-view'),
+    duoTextSlot: document.getElementById('duo-text-slot'),
+    duoScripture: document.getElementById('duo-scripture'),
+    duoScriptureText: document.getElementById('duo-scripture-text'),
+    duoScriptureReference: document.getElementById('duo-scripture-reference'),
+    duoLyrics: document.getElementById('duo-lyrics'),
+    duoLyricsTitle: document.getElementById('duo-lyrics-title'),
+    duoLyricsScrollport: document.getElementById('duo-lyrics-scrollport'),
+    duoLyricsTrack: document.getElementById('duo-lyrics-track'),
+    duoCameraVideo: document.getElementById('duo-camera-video'),
+    duoCameraStatus: document.getElementById('duo-camera-status'),
+
     microTime: document.getElementById('micro-time')
   };
 
@@ -77,9 +89,10 @@
 
   var state = {
     /* Which glass panel is showing: 'timer', 'clock', 'scripture', 'lyrics',
-       'text', 'media' (a stored photo/video/GIF/audio) or 'camera'. Every one
-       of these is shown *inside* the glass panel; the panel is never removed
-       by the mode itself. */
+       'text', 'media' (a stored photo/video/GIF/audio), 'camera', or one of
+       the two combined views ('lyrics-camera', 'scripture-camera') that put
+       scripture or lyrics over the live camera. Every one of these is shown
+       *inside* the glass panel; the panel is never removed by the mode itself. */
     mode: 'timer',
     /* The one thing that is not a panel content: "No Panel" hides the glass
        entirely and leaves just the background. */
@@ -386,6 +399,28 @@
     fitToPanel(el.textBody, el.textView);
   }
 
+  /** The duo panel's verse: the band it sits in is bounded (a fixed share of
+   *  the panel), and the reference below it is part of that budget. The
+   *  generic fitter walks direct children, but here the verse is one level in,
+   *  so the budget is worked out explicitly and handed to the same search. */
+  function fitDuoScripture() {
+    var node = el.duoScriptureText;
+    if (state.mode !== 'scripture-camera') { node.style.fontSize = ''; return; }
+    node.style.fontSize = '';
+    var base = parseFloat(getComputedStyle(node).fontSize) || 24;
+    var band = el.duoTextSlot;
+    var cs = getComputedStyle(band);
+    var contentHeight = band.clientHeight
+      - (parseFloat(cs.paddingTop) || 0) - (parseFloat(cs.paddingBottom) || 0);
+    if (!contentHeight) return;
+    var stack = getComputedStyle(el.duoScripture);
+    var gap = parseFloat(stack.rowGap) || 0;
+    var referenceHeight = el.duoScriptureReference.hidden ? 0 : outerHeight(el.duoScriptureReference);
+    var nodeCs = getComputedStyle(node);
+    var nodeMargins = (parseFloat(nodeCs.marginTop) || 0) + (parseFloat(nodeCs.marginBottom) || 0);
+    shrinkToFit(node, contentHeight - referenceHeight - nodeMargins - gap, base);
+  }
+
   /** Outer height of a box, including its own margins. The panel's children
    *  are <p> elements and the browser's default paragraph margins are *not*
    *  part of offsetHeight — counting only offsetHeight under-measures the
@@ -429,13 +464,16 @@
     var nodeCs = getComputedStyle(node);
     var nodeMargins = (parseFloat(nodeCs.marginTop) || 0) + (parseFloat(nodeCs.marginBottom) || 0);
     var available = contentHeight - siblingsHeight - nodeMargins - gap * Math.max(0, visible.length - 1);
+    shrinkToFit(node, available, base);
+  }
+
+  /** Binary-searches the largest font size that fits `available` pixels of
+   *  height, never below ~25% of the size CSS gave it (and never under 14px).
+   *  Probing rather than stepping down a pixel at a time matters: each probe
+   *  forces a reflow and the longest verses need tens of them. */
+  function shrinkToFit(node, available, base) {
     if (available <= 0) return;
-
     if (node.scrollHeight <= available) return; // already fits at its CSS size
-
-    // Binary-search the largest size that fits, rather than stepping down a
-    // pixel at a time — each probe forces a reflow, and the longest verses can
-    // need tens of them.
     var lo = Math.max(base * 0.25, 14);
     var hi = base;
     for (var step = 0; step < 22 && hi - lo > 0.5; step++) {
@@ -454,6 +492,7 @@
      ========================================================================== */
 
   var renderedLyricsSignature = null;
+  var renderedDuoLyricsSignature = null;
 
   function lyricsSignature(lyrics) {
     return (lyrics.title || '') + '\u0000' + lyrics.lines.join('\n');
@@ -475,30 +514,36 @@
     el.lyricsTitle.textContent = lyrics.title;
     el.lyricsEmpty.hidden = true;
     el.lyricsScrollport.hidden = false;
-
-    // Rebuild when the title *or any line* changes. Keying on the title alone
-    // would leave an edited song showing its old words, since editing keeps
-    // the title but rewrites the lines.
-    var signature = lyricsSignature(lyrics);
-    if (renderedLyricsSignature !== signature) {
-      el.lyricsTrack.innerHTML = '';
-      lyrics.lines.forEach(function (line) {
-        var p = document.createElement('p');
-        p.className = 'lyric-line';
-        p.textContent = line;
-        el.lyricsTrack.appendChild(p);
-      });
-      renderedLyricsSignature = signature;
-    }
-
+    renderedLyricsSignature = fillLyricTrack(el.lyricsTrack, lyrics, renderedLyricsSignature);
     applyLyricFocus();
+  }
+
+  /** Renders the whole song into a lyric track, rebuilding only when the title
+   *  *or any line* changed. Keying on the title alone would leave an edited
+   *  song showing its old words, since editing keeps the title but rewrites
+   *  the lines. Returns the signature it rendered, for the next comparison. */
+  function fillLyricTrack(track, lyrics, previousSignature) {
+    var signature = lyricsSignature(lyrics);
+    if (previousSignature === signature) return signature;
+    track.innerHTML = '';
+    lyrics.lines.forEach(function (line) {
+      var p = document.createElement('p');
+      p.className = 'lyric-line';
+      p.textContent = line;
+      track.appendChild(p);
+    });
+    return signature;
   }
 
   /** Marks the focused line and slides the track so it sits centred. Position
    *  comes from the row's own offsetTop/offsetHeight — a long lyric wraps, so
    *  the stride is not uniform and an assumed one would land off-centre. */
   function applyLyricFocus() {
-    var lines = el.lyricsTrack.children;
+    focusLyricTrack(el.lyricsTrack, el.lyricsScrollport);
+  }
+
+  function focusLyricTrack(track, scrollport) {
+    var lines = track.children;
     if (!lines.length) return;
 
     var index = state.lyrics.index;
@@ -511,22 +556,53 @@
     }
 
     var active = lines[index];
-    var viewportHeight = el.lyricsScrollport.clientHeight;
+    var viewportHeight = scrollport.clientHeight;
     if (!viewportHeight) return; // the panel is not laid out yet
 
     // Decide the tight state from the row's *full* size. Measuring while
     // is-tight is already applied would let the decision feed back on itself:
     // the shrunk row looks like it fits, the class comes off, the row grows
     // again — and the track lands on a stale offset mid-oscillation.
-    el.lyricsScrollport.classList.remove('is-tight');
+    scrollport.classList.remove('is-tight');
     var fullHeight = active.offsetHeight;
-    if (fullHeight > viewportHeight * 0.86) el.lyricsScrollport.classList.add('is-tight');
+    if (fullHeight > viewportHeight * 0.86) scrollport.classList.add('is-tight');
 
     // Re-read after the class change: shrinking every row moves the active
     // row's own offsetTop, not just its height.
     var rowTop = active.offsetTop;
     var rowHeight = active.offsetHeight;
-    el.lyricsTrack.style.transform = 'translateY(' + -(rowTop + rowHeight / 2 - viewportHeight / 2) + 'px)';
+    track.style.transform = 'translateY(' + -(rowTop + rowHeight / 2 - viewportHeight / 2) + 'px)';
+  }
+
+  /* --------------------------------------------------------------------------
+     Duo panel — scripture or lyrics over the live camera. The words use their
+     own nodes but the same helpers as the standalone views, so the two can
+     never disagree about what a verse or a lyric line looks like.
+     -------------------------------------------------------------------------- */
+
+  function renderDuoScripture() {
+    el.duoScripture.hidden = false;
+    el.duoLyrics.hidden = true;
+    el.duoScriptureText.textContent = state.scripture.text || 'Scripture unavailable';
+    el.duoScriptureReference.textContent = state.scripture.reference || '';
+    fitDuoScripture();
+  }
+
+  function renderDuoLyrics() {
+    el.duoScripture.hidden = true;
+    el.duoLyrics.hidden = false;
+    var lyrics = state.lyrics;
+    if (!lyrics.lines || !lyrics.lines.length) {
+      el.duoLyricsTitle.textContent = lyrics.title || 'Lyrics';
+      el.duoLyricsScrollport.hidden = true;
+      el.duoLyricsTrack.innerHTML = '';
+      renderedDuoLyricsSignature = null;
+      return;
+    }
+    el.duoLyricsTitle.textContent = lyrics.title;
+    el.duoLyricsScrollport.hidden = false;
+    renderedDuoLyricsSignature = fillLyricTrack(el.duoLyricsTrack, lyrics, renderedDuoLyricsSignature);
+    focusLyricTrack(el.duoLyricsTrack, el.duoLyricsScrollport);
   }
 
   /* ==========================================================================
@@ -620,7 +696,7 @@
     el.fgMedia.innerHTML = '';
   }
 
-  /** Releases the camera stream and clears the <video>. */
+  /** Releases the camera stream and clears both camera <video>s. */
   function teardownCamera() {
     cameraToken++;
     if (cameraStream) {
@@ -628,8 +704,11 @@
       cameraStream = null;
     }
     el.cameraVideo.srcObject = null;
+    el.duoCameraVideo.srcObject = null;
     el.cameraStatus.hidden = true;
     el.cameraStatus.textContent = '';
+    el.duoCameraStatus.hidden = true;
+    el.duoCameraStatus.textContent = '';
   }
 
   /** Mounts a <video> or <audio> element for a stored media Blob. */
@@ -707,13 +786,20 @@
   /** Opens the device camera as a mirrored live feed. The console names which
    *  physical camera via state.cameraDeviceId; when it names one that is gone
    *  (unplugged since the picker was read) this falls back to the browser's own
-   *  default rather than showing a dead panel. */
+   *  default rather than showing a dead panel.
+   *
+   *  One stream feeds both camera views: the standalone camera panel and the
+   *  combined scripture/lyrics-over-camera panel. The same physical device is
+   *  opened once, and whichever <video> is on screen is handed the stream, so
+   *  switching between the two never re-prompts for permission. */
   function renderCamera() {
     teardownCamera();
     var token = ++cameraToken;
+    var video = cameraVideoNode();
+    var status = cameraStatusNode();
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      el.cameraStatus.textContent = 'Camera is not available on this device.';
-      el.cameraStatus.hidden = false;
+      status.textContent = 'Camera is not available on this device.';
+      status.hidden = false;
       return;
     }
 
@@ -733,17 +819,24 @@
         return;
       }
       cameraStream = stream;
-      el.cameraVideo.srcObject = stream;
-      el.cameraStatus.hidden = true;
-      var played = el.cameraVideo.play();
+      video.srcObject = stream;
+      status.hidden = true;
+      var played = video.play();
       if (played && played.catch) played.catch(function () {});
     }).catch(function (err) {
       console.warn('Camera unavailable:', err);
       if (token !== cameraToken) return;
-      el.cameraStatus.textContent = 'Camera permission was refused on the display device.';
-      el.cameraStatus.hidden = false;
+      status.textContent = 'Camera permission was refused on the display device.';
+      status.hidden = false;
     });
   }
+
+  /** The <video> and status line the current mode's camera renders into. The
+   *  duo panel has its own nodes; every other camera-showing mode uses the
+   *  standalone panel's. */
+  function isDuoMode(mode) { return mode === 'lyrics-camera' || mode === 'scripture-camera'; }
+  function cameraVideoNode() { return isDuoMode(state.mode) ? el.duoCameraVideo : el.cameraVideo; }
+  function cameraStatusNode() { return isDuoMode(state.mode) ? el.duoCameraStatus : el.cameraStatus; }
 
   /** Frames a webpage inside the panel. The console sends only the URL; the
    *  page is fetched through this project's own server (/proxy) rather than
@@ -842,6 +935,7 @@
   var appliedCameraKey = null;
   var appliedWebpageKey = null;
   var cameraOpen = false;
+  var appliedDuoKey = null;
 
   /** Shows the panel the mode names, and applies "No Panel". Runs on every
    *  push, so the media and camera panels are only (re)built when the
@@ -850,6 +944,7 @@
   function applyMode() {
     var mode = state.mode;
     var shown = !state.panelHidden;
+    var duo = isDuoMode(mode);
 
     el.timerView.style.display = shown && mode === 'timer' ? 'flex' : 'none';
     el.clockView.style.display = shown && mode === 'clock' ? 'flex' : 'none';
@@ -859,6 +954,7 @@
     el.mediaView.style.display = shown && mode === 'media' ? 'flex' : 'none';
     el.cameraView.style.display = shown && mode === 'camera' ? 'flex' : 'none';
     el.webpageView.style.display = shown && mode === 'webpage' ? 'flex' : 'none';
+    el.duoView.style.display = shown && duo ? 'flex' : 'none';
 
     if (mode === 'media' && shown) {
       var key = JSON.stringify(state.media || null);
@@ -880,15 +976,34 @@
       renderWebpage('');
     }
 
-    // The camera is a live device stream, so it is only reopened when the
-    // panel enters camera mode or the operator picks a different camera —
-    // never on the silent re-pushes a verse step makes.
-    var wantCamera = mode === 'camera' && shown;
+    // The camera is a live device stream, so it is only reopened when a
+    // camera-showing panel enters or the operator picks a different camera —
+    // never on the silent re-pushes a verse step makes. The standalone camera
+    // panel and both duo panels share the one stream; switching between them
+    // does not reopen the device.
+    var wantCamera = (mode === 'camera' || duo) && shown;
     var cameraKey = wantCamera ? (state.cameraDeviceId || '') : null;
     if (wantCamera && (!cameraOpen || cameraKey !== appliedCameraKey)) renderCamera();
     else if (!wantCamera && cameraOpen) teardownCamera();
     appliedCameraKey = cameraKey;
     cameraOpen = wantCamera;
+
+    if (duo && shown) {
+      // Only re-render when what is *shown* changed. A verse/lyric step
+      // re-pushes, and rebuilding the words on every one would restart the
+      // lyric glide and refit the verse mid-song.
+      var duoKey = mode + '|' + JSON.stringify(
+        mode === 'scripture-camera' ? state.scripture : state.lyrics);
+      if (duoKey !== appliedDuoKey) {
+        appliedDuoKey = duoKey;
+        if (mode === 'scripture-camera') renderDuoScripture();
+        else renderDuoLyrics();
+      } else if (mode === 'lyrics-camera') {
+        focusLyricTrack(el.duoLyricsTrack, el.duoLyricsScrollport);
+      }
+    } else {
+      appliedDuoKey = null;
+    }
 
     // "No Panel" is the one thing that removes the glass altogether.
     document.body.classList.toggle('no-panel', !shown);
@@ -921,7 +1036,7 @@
     if (saved.webpageUrl) state.webpageUrl = saved.webpageUrl;
     if (saved.cameraDeviceId) state.cameraDeviceId = saved.cameraDeviceId;
     // A remembered camera cannot be opened without a console to ask for it.
-    if (state.mode === 'camera') { state.mode = 'timer'; }
+    if (isDuoMode(state.mode) || state.mode === 'camera') { state.mode = 'timer'; }
     applyMode();
     setMode(state.mode);
   }
@@ -1012,9 +1127,9 @@
     if (state.mode === 'timer') {
       if (content.eventName) state.eventName = content.eventName;
       if (content.targetISO) { state.targetISO = content.targetISO; renderedUnitKeys = ''; }
-    } else if (state.mode === 'scripture') {
+    } else if (state.mode === 'scripture' || state.mode === 'scripture-camera') {
       state.scripture = { text: content.text, reference: content.reference };
-    } else if (state.mode === 'lyrics') {
+    } else if (state.mode === 'lyrics' || state.mode === 'lyrics-camera') {
       state.lyrics = {
         title: content.title || 'Lyrics',
         lines: Array.isArray(content.lines) ? content.lines : null,
@@ -1060,6 +1175,10 @@
       renderLyrics();
       requestAnimationFrame(function () { applyLyricFocus(); });
     }
+    if (mode === 'scripture-camera') requestAnimationFrame(fitDuoScripture);
+    if (mode === 'lyrics-camera') {
+      requestAnimationFrame(function () { focusLyricTrack(el.duoLyricsTrack, el.duoLyricsScrollport); });
+    }
     if (mode === 'text') {
       renderText(state.text);
       requestAnimationFrame(fitTextPanel);
@@ -1084,6 +1203,8 @@
     if (state.mode === 'lyrics') applyLyricFocus();
     if (state.mode === 'scripture') fitScriptureText();
     if (state.mode === 'text') fitTextPanel();
+    if (state.mode === 'scripture-camera') fitDuoScripture();
+    if (state.mode === 'lyrics-camera') focusLyricTrack(el.duoLyricsTrack, el.duoLyricsScrollport);
   }
 
   var resizeDebounce = null;

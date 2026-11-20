@@ -663,8 +663,16 @@ def _redact_url(url: str) -> str:
 
 
 def _redact_text(text: str) -> str:
-    """Strip anything that looks like a stream key from an ffmpeg log line."""
-    return re.sub(r"(rtmps?://\S+/)\S+", r"\1****", text)
+    """Strip anything that looks like a stream key from an ffmpeg log line,
+    then turn the one message the operator can actually act on into plain
+    words. "Invalid data found when processing input" is ffmpeg saying the
+    bytes did not begin with an MP4 header — the signature of a relay that
+    started mid-stream, and a sentence no operator should have to decode."""
+    text = re.sub(r"(rtmps?://\S+/)\S+", r"\1****", text)
+    if "Invalid data found when processing input" in text or "moov atom not found" in text:
+        return ("The relay received video that did not start at the beginning "
+                "of the stream. Stop and start the stream again.")
+    return text
 
 
 # The one live session, guarded by a lock. The console starts one at a time.

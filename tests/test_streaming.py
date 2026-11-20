@@ -405,8 +405,19 @@ def main():
             drop.evaluate("""() => {
               const Real = window.WebSocket;
               window.__sockets = [];
+              window.__sends = [];
               window.WebSocket = function (url) {
                 const ws = new Real(url);
+                ws.binaryType = 'arraybuffer';
+                const id = window.__sockets.length + 1;
+                const send = ws.send.bind(ws);
+                ws.send = function (d) {
+                  if (typeof d !== 'string') {
+                    const u8 = new Uint8Array(d.buffer || d);
+                    window.__sends.push({ conn: id, head: Array.from(u8.subarray(0, 12)) });
+                  }
+                  return send(d);
+                };
                 window.__sockets.push(ws);
                 return ws;
               };
@@ -431,6 +442,28 @@ def main():
             drop_label = drop.inner_text("#live-btn-label")
             check("the time on air did not reset with the socket",
                   drop_label not in ("Go Live", "Connecting…", "0:00"), drop_label)
+
+            # A reopened socket is not enough: the relay it talks to is a
+            # *new* ffmpeg reading a stream that has already begun, so the
+            # init segment (ftyp + moov) has to be replayed or ffmpeg sees a
+            # bare `moof`, fails with "Invalid data found when processing
+            # input", and the broadcast is over while the button still says
+            # live. Check what the second connection actually sent.
+            first_bytes = drop.evaluate("""() => {
+              const sends = window.__sends || [];
+              const second = sends.filter(s => s.conn === 2);
+              return second.length ? Array.from(second[0].head) : null;
+            }""")
+            if first_bytes:
+                check("a reconnected relay is handed the MP4 header, not a bare fragment",
+                      first_bytes[4:8] == [102, 116, 121, 112], str(first_bytes[:12]))
+            check("the stream is still on air after the reconnect settled",
+                  not drop.evaluate("document.getElementById('live-stop-btn').hidden"))
+            drop_status = drop.evaluate("""() => fetch('/stream/status', {cache:'no-store'})
+              .then(r => r.json()).catch(() => ({}))""")
+            check("the relay is live again, not failed",
+                  (drop_status or {}).get("state") in ("live", "connecting", "stopped"),
+                  str((drop_status or {}).get("detail"))[:120])
             drop_ingest.stop()
             drop.close()
 

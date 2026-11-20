@@ -3723,6 +3723,13 @@ function streamSocketUrl() {
  *  own. This is the OBS/Wirecast model: adapt, do not abort. */
 function sendStreamBytes(run, data, position) {
   if (!run || run.stopRequested || run.finished) return;
+  // The init segment is captured here, before the socket test: the opening
+  // ftyp/moov are the first bytes the muxer emits, and the socket is often
+  // still opening at that moment. Capturing only on the direct path left
+  // `initBytes` empty, so a reconnect had no header to replay and the new
+  // ffmpeg died on a bare `moof` with "Invalid data found when processing
+  // input".
+  captureStreamInit(run, data, position);
   if (!socketOpen(run)) {
     // Not a failure: the reconnect loop owns reopening. Hold the bytes in
     // order, and cap the hold so a long outage cannot eat the heap.
@@ -3734,7 +3741,6 @@ function sendStreamBytes(run, data, position) {
     scheduleStreamReconnect(run);
     return;
   }
-  captureStreamInit(run, data, position);
   flushStreamQueue(run);
   adaptStreamBitrate(run);
   if (run.ws.bufferedAmount > STREAM_MAX_QUEUE_BYTES) {
@@ -3858,33 +3864,79 @@ function socketOpen(run) {
 }
 
 function flushStreamQueue(run) {
-  if (!run.queued.length || !socketOpen(run)) return;
+  if (!socketOpen(run)) return;
+  // A reconnected relay starts a brand-new ffmpeg reading a stream that is no
+  // longer at its beginning, so the init segment (ftyp + moov) has to be
+  // replayed first or the new process cannot parse a single sample — ffmpeg
+  // says "moov atom not found ... Invalid data found when processing input"
+  // because the first box it sees is a `moof`. This must happen even when
+  // nothing is queued: the init segment is sent before the first chunk, so by
+  // the time a socket drops the queue is usually empty and the replay would
+  // never run.
+  if (run.needInit) {
+    run.needInit = false;
+    if (run.initBytes && run.initBytes.length) writeStreamChunk(run, run.initBytes);
+  }
+  if (!run.queued.length) return;
   var queued = run.queued;
   run.queued = [];
   run.queuedBytes = 0;
-  // A reconnected relay starts a brand-new ffmpeg reading a stream that is no
-  // longer at its beginning, so the init segment (ftyp + moov) has to be
-  // replayed first or the new process cannot parse a single sample.
-  if (run.needInit && run.initBytes && run.initBytes.length) {
-    run.needInit = false;
-    writeStreamChunk(run, run.initBytes);
-  }
   queued.forEach(function (data) { writeStreamChunk(run, data); });
 }
 
-/** Keeps a copy of the fragmented MP4's opening bytes — everything written
- *  from position 0 until the cap. That is the ftyp/moov a fresh ffmpeg needs in
- *  order to read the samples that follow it after a reconnect. */
+/** The byte offset where the first media fragment (`moof`) begins, or -1 while
+ *  the header is still incomplete. Everything before that offset is the init
+ *  segment — ftyp, moov and any padding — which is the only part a fresh ffmpeg
+ *  needs to start reading a stream that has already begun. */
+function streamInitBoundary(bytes) {
+  var off = 0;
+  while (off + 8 <= bytes.length) {
+    var size = ((bytes[off] << 24) | (bytes[off + 1] << 16) |
+                (bytes[off + 2] << 8) | bytes[off + 3]) >>> 0;
+    var type = String.fromCharCode(bytes[off + 4], bytes[off + 5],
+                                   bytes[off + 6], bytes[off + 7]);
+    if (type === 'moof') return off;
+    if (size === 1) {
+      // A 64-bit size follows the type; the header boxes never use it, but a
+      // truncated read must not be mistaken for a complete box.
+      if (off + 16 > bytes.length) return -1;
+      var hi = ((bytes[off + 8] << 24) | (bytes[off + 9] << 16) |
+                (bytes[off + 10] << 8) | bytes[off + 11]) >>> 0;
+      var lo = ((bytes[off + 12] << 24) | (bytes[off + 13] << 16) |
+                (bytes[off + 14] << 8) | bytes[off + 15]) >>> 0;
+      size = hi * 4294967296 + lo;
+    }
+    if (size < 8 || off + size > bytes.length) return -1;
+    off += size;
+  }
+  return -1;
+}
+
+/** Keeps a copy of the fragmented MP4's init segment — ftyp and moov, and
+ *  nothing after the first `moof`.
+ *
+ *  Replaying the whole opening *including fragments* would hand a reconnected
+ *  ffmpeg samples carrying timestamps from before the drop, so only the header
+ *  is kept: the reconnect forces a fresh keyframe, which starts a new fragment
+ *  with a current timestamp. The cap is a backstop against a malformed stream
+ *  that never presents a `moof`. */
 function captureStreamInit(run, data, position) {
-  if (run.initBytes && run.initBytes.length >= STREAM_INIT_CAP) return;
+  if (run.initComplete) return;
   var have = run.initBytes ? run.initBytes.length : 0;
   if (position !== have) return; // not contiguous with what we have
   var room = STREAM_INIT_CAP - have;
+  if (room <= 0) { run.initComplete = true; return; }
   var slice = data.byteLength > room ? data.subarray(0, room) : data;
   var merged = new Uint8Array(have + slice.byteLength);
   if (have) merged.set(run.initBytes, 0);
   merged.set(slice, have);
-  run.initBytes = merged;
+  var boundary = streamInitBoundary(merged);
+  if (boundary > 0) {
+    run.initBytes = merged.subarray(0, boundary);
+    run.initComplete = true;
+  } else {
+    run.initBytes = merged;
+  }
 }
 
 function writeStreamChunk(run, data) {

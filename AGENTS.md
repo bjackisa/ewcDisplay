@@ -625,6 +625,22 @@ sustained outage (45s) or exhausted reconnect attempts ends the stream.
   `REC_FRAME_PERIOD_MICROS` (`floor(1e6 / REC_FRAME_RATE)`) when the chunk has
   none. The suite measures real frame luminance with `signalstats` for this
   reason: an audio track that exists is not a picture.
+- **A reconnected relay must be handed the init segment, and only the init
+  segment.** A dropped socket is reopened against a *new* ffmpeg reading a
+  stream that has already begun, so the console replays `ftyp`+`moov` first.
+  Two bugs hid here, both ending in ffmpeg's `Error opening input: Invalid data
+  found when processing input` — a broadcast that is over while the button
+  still says live. The capture of the init bytes sat on the *direct* path only,
+  so whenever the socket was still opening when the muxer emitted its first
+  bytes `initBytes` stayed empty and there was nothing to replay; and the
+  replay sat behind `if (!run.queued.length) return`, so a reconnect with an
+  empty queue (the usual case — the init segment is sent first, long before the
+  drop) skipped it. The replay must also stop at the first `moof`: replaying
+  the opening *fragments* hands the new ffmpeg samples from before the drop.
+  `streamInitBoundary()` walks the box sizes to find that offset. The suite now
+  checks the second connection's first bytes are `ftyp`, not just that a socket
+  was reopened — the old check passed while every reconnect was dead on
+  arrival.
 - **An encoder that accepts a config it cannot run produces the null
   `colorSpace` error at Stop.** `configure()` does not validate the profile or
   the size; a machine with no 4K H.264 accepts `avc1.640033` at 3840×2160 and
